@@ -124,9 +124,9 @@ formats:
   Custom: [200, 280] # Собственные форматы
 ```
 ## 📱 Скриншоты ##
-[GUI Report](screenshots/gui_report.png) 
+![GUI Report](screenshots/gui_report.png) 
 
-[Excel Report](screenshots/excel_output.png) 
+![Excel Report](screenshots/excel_output.png) 
 
 ## Возможные проблемы ##
 
