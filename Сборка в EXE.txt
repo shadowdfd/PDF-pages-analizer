@@ -1,0 +1,21 @@
+pyinstaller --onefile --windowed ^
+    --add-data "logo.png;." ^
+    --icon "paper-size.ico" ^
+	--version-file=version_info.py ^
+    pdfpages_pro.py
+	
+	
+Объяснение флагов:
+
+--onefile — один EXE файл
+
+--windowed — без консоли
+
+--add-data "logo.png;." — запаковывает logo.png внутрь EXE
+
+--icon "paper-size.ico" — иконка самого EXE (отдельно от GUI)
+
+
+
+
+pyinstaller --onefile --windowed --add-data "logo.png;." --icon "paper-size.ico" --version-file=file_version_info.txt pdfpages_pro.py
