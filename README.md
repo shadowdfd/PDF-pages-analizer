@@ -1,7 +1,7 @@
 # PDF Page Analyzer 📄 #
-[Python](https://img.shields.io/badge/Python-3.8%2!)
-[License: MIT](https://img.shields.io/badge/License-MIT-yellow!)
-[PyMuPDF](https://img.shields.io/badge/PyMuPDF-latest)
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
+![PyMuPDF](https://img.shields.io/badge/PyMuPDF-green)
 
 Автоматический анализ PDF документов для подбора принтера и планирования печати. 
 
