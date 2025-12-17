@@ -2,6 +2,8 @@
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
 ![PyMuPDF](https://img.shields.io/badge/PyMuPDF-green)
+![Static Badge](https://img.shields.io/badge/coded_by-perplexity-red?logo=perplexity&logoColor=%231FB8CD)
+
 
 Автоматический анализ PDF документов для подбора принтера и планирования печати. 
 
