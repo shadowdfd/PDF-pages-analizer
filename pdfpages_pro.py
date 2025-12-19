@@ -45,15 +45,27 @@ class PDFAnalyzer:
             return default_config
 
     def get_standard_format(self, w_mm: float, h_mm: float) -> tuple[str, str]:
-        """Возвращает (название_формата, '210x297')"""
+        """Custom1, Custom2... для нестандартных размеров"""
+        
+        # Стандартные форматы
         for name, (sw, sh) in self.formats.items():
             if (abs(w_mm - sw) <= self.tolerance and abs(h_mm - sh) <= self.tolerance) or \
                (abs(w_mm - sh) <= self.tolerance and abs(h_mm - sw) <= self.tolerance):
-                if w_mm <= h_mm:  # книжная ориентация
+                if w_mm <= h_mm:
                     return name, f"{int(sw)}x{int(sh)}"
-                else:  # альбомная
-                    return name, f"{int(sh)}x{int(sw)}"
-        return "НеСтандарт", f"{int(w_mm)}x{int(h_mm)}"
+                return name, f"{int(sh)}x{int(sw)}"
+        
+        # НЕСТАНДАРТНЫЙ формат
+        size_key = f"{int(w_mm)}x{int(h_mm)}"
+        
+        # Счётчик уникальных нестандартных размеров
+        if not hasattr(self, '_custom_counter'):
+            self._custom_counter = {}
+        
+        if size_key not in self._custom_counter:
+            self._custom_counter[size_key] = len(self._custom_counter) + 1
+        
+        return f"Custom{self._custom_counter[size_key]}", size_key
 
     def analyze_page_color(self, page: fitz.Page) -> str:
         """Определяет цветность страницы"""
@@ -225,7 +237,7 @@ class PDFAnalyzer:
 • Цветность: Ч/Б или Цветная (для подбора принтера)
 • Настройки хранятся в config.yaml (допуск, форматы)
     
-    Инструмент разработан для Отдела выпуска компании
+    Инструмент разработан для Отдела выпуска компании СП-Инновация
     Автор: Родионов Вадим
 
 Совет: выделите текст отчёта и нажмите Ctrl+C для копирования!"""
@@ -384,4 +396,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
