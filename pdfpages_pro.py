@@ -604,13 +604,22 @@ class MainWindow:
         ttk.Button(bottom_frame, text="💾 Сохранить отчёт", command=self.save_report_to_file).pack(side=tk.RIGHT, padx=(5, 0))
 
         def hotkeys(event):
-            if event.keycode == 30 and (event.state & 0x0004):  # Ctrl+A
+            CTRL_MASK = 0x0004  # Control_L
+            SHIFT_MASK = 0x0001 # Shift_L
+            
+            #Debug string
+            #print(f"keycode={event.keycode}, state={hex(event.state)}, keysym={event.keysym}")
+            
+            # Ctrl+A (keycode=30)
+            if (event.state & CTRL_MASK) and event.keycode == 65:
                 self.select_all()
                 return "break"
-            elif event.keycode == 36 and (event.state & 0x0004):  # Ctrl+S
+            # Ctrl+S (keycode=54)
+            elif (event.state & CTRL_MASK) and event.keycode == 83:
                 self.save_report_to_file
                 return "break"
-            elif event.keycode == 54 and (event.state & 0x0004):  # Ctrl+C
+            # Ctrl+C (keycode=54)
+            elif (event.state & CTRL_MASK) and event.keycode == 67:
                 self.stats_text.event_generate("<<Copy>>")
                 return "break"
             return None
