@@ -46,8 +46,13 @@
 
 ### 1. Установка ###
 ``` bash
-pip install pymupdf pandas openpyxl pyyaml Pillow
+pip install pymupdf pandas openpyxl pyyaml
 ```
+или
+``` bash
+pip install -r requirements.txt
+```
+
 ### 2. Конфигурация (config.yaml) ###
 ```text
 tolerance_mm: 5.0  # Допуск распознавания ±5мм
@@ -101,11 +106,13 @@ python pdfpages_pro.py "C:\PDFs"
 
 ## 🛠 Компиляция в EXE ##
 ```bash
-pyinstaller --onefile --windowed ^
+pyinstaller --onefile ^
+    --windowed ^
     --add-data "logo.png;." ^
-    --add-data "config.yaml;." ^
+    --add-data "icon.png;." ^
     --icon "logo.ico" ^
     --name "PDF_Analyzer" ^
+    --version-file=file_version_info.txt ^
     pdfpages_pro.py
 ```
 Результат: PDF_Analyzer.exe (~60MB) — запускается без Python!
