@@ -87,8 +87,9 @@ python pdfpages_pro.py "C:\PDFs"
 ```text
 📁 pdfpages_pro/
 ├── pdfpages_pro.py     # Основной скрипт ⭐
-├── config.yaml         # Настройки форматов
+├── config.yaml         # Конфиг / Настройки форматов
 ├── logo.png           # Логотип (опционально)
+├── icon.png           # Иконка приложения
 ├── README.md          # Этот файл
 └── requirements.txt   # Зависимости
 ```
