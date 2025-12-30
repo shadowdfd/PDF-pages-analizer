@@ -6,23 +6,20 @@ import yaml
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-import threading
+#import threading
 import webbrowser
 
 pt_to_mm = 0.3528
 font_face = "Calibri"
-version = "v.1.2.0"
+version = "v.1.3.0"
+config_path="config.yaml"
 
 class PDFAnalyzer:
     
     def __init__(self, config_path="config.yaml"):
         self.config = self.load_config(config_path)
-        self.fileload = self.config["fileload"]        # Загрузился ли конфиг
         self.tolerance = self.config["tolerance_mm"]
-        if self.config["compress_ranges"] == 1:
-            self.compress_ranges_y = True
-        else:
-            self.compress_ranges_y = False
+        self.compress_ranges_y = self.config["compress_ranges"]
         self.formats = {k: tuple(v) for k, v in self.config["formats"].items()}
         self.stats = {
             "files_processed": 0,
@@ -33,14 +30,36 @@ class PDFAnalyzer:
 
     def load_config(self, config_path):
         """Загружает конфигурацию из YAML"""
+        # Конфиг по умолчанию
         default_config = {
-            "fileload": "не загружен, используются значения по умолчанию", 
             "tolerance_mm": 5.0,
-            "compress_ranges": 1,  # Сжимать диапазоны 1-да, 0-нет.
+            "compress_ranges": True,
             "formats": {
-                "A4": [210, 297],
+                "A0": [841, 1189],
+                "A0×2": [1189, 1682],
+                "A0×3": [1189, 2523],
+                "A1": [594, 841],
+                "A1×3": [841, 1783],
+                "A1×4": [841, 2378],
+                "A2": [420, 594],
+                "A2×3": [594, 1261],
+                "A2×4": [594, 1682],
+                "A2×5": [594, 2102],
                 "A3": [297, 420],
-                # ... остальные форматы
+                "A3×3": [420, 891],
+                "A3×4": [420, 1189],
+                "A3×5": [420, 1486],
+                "A3×6": [420, 1783],
+                "A3×7": [420, 2080],
+                "A4": [210, 297],
+                "A4×3": [297, 630],
+                "A4×4": [297, 841],
+                "A4×5": [297, 1051],
+                "A4×6": [297, 1261],
+                "A4×7": [297, 1471],
+                "A4×8": [297, 1682],
+                "A4×9": [297, 1892],
+                "A5": [148, 210]
             }
         }
         try:
@@ -101,6 +120,7 @@ class PDFAnalyzer:
         return "Ч/Б"
 
     def process_pdf(self, pdf_path: str, all_data: list) -> None:
+        
         """Обрабатывает один PDF файл"""
         try:
             self.stats["files_processed"] += 1
@@ -141,7 +161,9 @@ class PDFAnalyzer:
     def process_path(self, path: str) -> tuple[pd.DataFrame, pd.DataFrame, str]:
         """Главная функция обработки"""
         all_data = []
+        self.config = self.load_config(config_path)
         path_obj = Path(path)
+
 
         if path_obj.is_file() and path_obj.suffix.lower() == ".pdf":
             self.process_pdf(str(path_obj), all_data)
@@ -192,204 +214,6 @@ class PDFAnalyzer:
 
         
         return df, summary, str(out_path)
-
-    def show_reportold(self):
-        """Улучшенный GUI-отчёт с логотипом, инструкцией и копированием"""
-        root = tk.Tk()
-        root.title("Отчёт анализа PDF")
-        root.geometry("700x600")
-        root.resizable(True, True)
-
-        # Главный фрейм
-        main_frame = ttk.Frame(root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        def resource_path(relative_path):
-            """Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller"""
-            try:
-                # PyInstaller создаёт временную папку _MEIPASS
-                base_path = sys._MEIPASS
-            except Exception:
-                base_path = os.path.abspath(".")
-            
-            return os.path.join(base_path, relative_path)
-
-        # ЛОГОТИП - ПРАВЫЙ ВЕРХНИЙ УГОЛ (работает в EXE)
-        try:
-            from PIL import Image, ImageTk
-            
-            logo_path = resource_path("logo.png")
-            img = Image.open(logo_path)
-            #img = img.resize((200, 33), Image.Resampling.LANCZOS)
-            logo_img = ImageTk.PhotoImage(img)
-            
-            logo_label = tk.Label(root, image=logo_img, borderwidth=0)
-            logo_label.image = logo_img
-            logo_label.place(relx=1.0, rely=0.02, anchor="ne", x=-5, y=5)
-            
-        except (ImportError, FileNotFoundError):
-            # Текстовый логотип как fallback
-            logo_label = tk.Label(root, text="🏢 PDF Analyzer", 
-                                 font=(font_face, 14, "bold"), fg="#2E86AB")
-            logo_label.place(relx=1.0, rely=0.02, anchor="ne", x=-5, y=5)
-
-        # Заголовок
-        Label_frame = ttk.Frame(main_frame)
-        Label_frame.pack(fill=tk.X, pady=(0,5))
-        ttk.Label(Label_frame, text="ОТЧЁТ", font=(font_face, 16, "bold")).pack(side=tk.LEFT, pady=(0, 0))
-        ttk.Label(Label_frame, text="анализа содержимого файлов PDF", font=(font_face, 12)).pack(side=tk.LEFT, pady=(0, 5))
-        
-        # ИНСТРУКЦИЯ
-        instr_frame = ttk.LabelFrame(main_frame, text="Инструкция", padding="10")
-        instr_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        instructions = """• Бросьте PDF файл или папку с PDF на ярлык для запуска анализа
-• Создаётся Excel-файл с двумя листами: "Все страницы" и "Сводка ЕСКД"
-• Форматы распознаются по ГОСТ 2.301-68 (A0, A1, A4×3 и т.д.)
-• Цветность: Ч/Б или Цветная (для подбора принтера)
-• Настройки хранятся в config.yaml (допуск, форматы)
-    
-    Инструмент разработан для Отдела выпуска компании СП-Инновация
-    Автор: Родионов Вадим
-
-Совет: выделите текст отчёта и нажмите Ctrl+C для копирования!"""
-        
-        instr_text = tk.Text(instr_frame, height=4, wrap=tk.WORD, font=(font_face, 9))
-        scrollbar = ttk.Scrollbar(instr_frame, orient=tk.VERTICAL, command=instr_text.yview)
-        instr_text.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        instr_text.insert(tk.END, instructions)
-        instr_text.config(state=tk.DISABLED, bg="lightyellow")
-        instr_text.pack(fill=tk.X)
-
-        # СТАТИСТИКА (копируемый текст с выделением)
-        stats_frame = ttk.LabelFrame(main_frame, text="Статистика обработки", padding="15")
-        stats_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
-
-        # Текстовое поле С ВЫДЕЛЕНИЕМ
-        stats_text = tk.Text(stats_frame, wrap=tk.WORD, font=(font_face, 10), 
-                            height=12, bg="#f8f9fa", relief="solid", bd=1,
-                            selectbackground="#4CAF50", selectforeground="white",
-                            padx=10, pady=10)
-        df, summary, out_path = self.last_result  # Сохраняем результат process_path в self.last_result                    
-        scrollbar = ttk.Scrollbar(stats_frame, orient=tk.VERTICAL, command=stats_text.yview)
-        stats_text.configure(yscrollcommand=scrollbar.set)
-
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        stats_text.pack(fill=tk.BOTH, expand=True)
-    
-        # Формируем отчёт с детальной сводкой форматов
-        report_lines = []
-
-        # Заголовок и базовая статистика
-        report_lines.append("=== ОТЧЁТ АНАЛИЗА PDF ===")
-        report_lines.append(f"Дата: {pd.Timestamp.now().strftime('%d.%m.%Y %H:%M')}")
-        report_lines.append("")
-
-        report_lines.append("📊 СТАТИСТИКА:")
-        report_lines.append(f"  Файлов обработано: {self.stats['files_processed']}")
-        report_lines.append(f"  Листов обработано: {self.stats['pages_processed']}")
-        report_lines.append(f"  Файлов пропущено: {self.stats['files_skipped']}")
-        report_lines.append(f"  Допуск форматов: {self.tolerance} мм")
-        report_lines.append(f"  Форматов в БД: {len(self.formats)}")
-        report_lines.append("")
-
-        # СТАТИСТИКА ПО ФАЙЛАМ
-        report_lines.append("📁 СТАТИСТИКА ПО ФАЙЛАМ:")
-
-        file_stats = df.groupby("Файл").agg({
-            "Страница": "count",
-            "Цветность": lambda x: (x == "Цветная").sum()
-        }).round(0).astype(int).reset_index()
-
-        file_details = df.groupby("Файл")["Страница"].apply(
-            lambda x: f"{len(x)} стр. (1-{max(x)})"
-        ).to_dict()
-
-        for _, row in file_stats.iterrows():
-            file_name = row["Файл"]
-            total_pages = row["Страница"]
-            color_pages = row["Цветность"]
-            page_range = file_details.get(file_name, "-")
-            
-            report_lines.append(f"  {file_name}: Всего {total_pages} стр., цветных: {color_pages}, диапазон: {page_range}")
-
-        report_lines.append("")
-
-        # СВОДКА ПО ФОРМАТАМ ПО ФАЙЛАМ
-        report_lines.append("")
-        report_lines.append("📐 ФОРМАТЫ ПО ФАЙЛАМ:")
-
-        # Группируем по Файл
-        for file_name, file_group in df.groupby("Файл"):
-
-            report_lines.append(f"\n    ФАЙЛ: {file_name}:")        
-
-             # Форматы внутри файла
-            file_formats = file_group.groupby("Стандартный формат").agg({
-                "Страница": "count"
-            }).round(0).astype(int).reset_index()
-            
-            file_format_details = file_group.groupby("Стандартный формат")["Страница"].apply(
-                lambda x: ",".join(map(str, sorted(x.tolist())))
-            ).to_dict()
-            
-            for _, row in file_formats.iterrows():
-                fmt = row["Стандартный формат"]
-                total_pages = row["Страница"]
-                pages_list = file_format_details.get(fmt, "-")
-                sample_size = file_group[file_group["Стандартный формат"] == fmt]["Размер стандарта"].iloc[0]
-                
-                report_lines.append(f"      {fmt} {sample_size} ({total_pages} стр.):")       
-                report_lines.append(f"          Страницы: {pages_list}")
-                report_lines.append("")
-
-        report_lines.append("")
-
-        # Ошибки
-        if self.stats["errors"]:
-            report_lines.append(f"❌ ОШИБКИ ({len(self.stats['errors'])}):")
-            for i, error in enumerate(self.stats["errors"], 1):
-                report_lines.append(f"  {i}. {error}")
-        else:
-            report_lines.append("✅ Ошибок не обнаружено")
-        report_lines.append("\n Подробный отчет в файле Excel")
-        report_text = "\n".join(report_lines)
-
-        # Вставляем отчёт
-        stats_text.insert(tk.END, report_text)
-        
-        # ✅ РАЗРЕШАЕМ выделение и копирование
-        stats_text.bind("<Control-c>", lambda e: stats_text.event_generate("<<Copy>>"))      # Ctrl+C
-        stats_text.bind("<Button-3>", lambda e: stats_text.event_generate("<<Copy>>"))       # ПКМ меню
-        stats_text.config(state=tk.DISABLED)    
-
-        # Кнопки
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=10)
-
-        def select_all():
-            stats_text.config(state=tk.NORMAL)
-            stats_text.tag_add("sel", "1.0", "end")
-            stats_text.config(state=tk.DISABLED)
-
-        ttk.Button(btn_frame, text="Выделить всё", command=select_all).pack(side=tk.LEFT, padx=(0, 5))
-        
-        def copy_to_clipboard():
-            root.clipboard_clear()
-            root.clipboard_append(report_text)
-            messagebox.showinfo("Копирование", "Отчёт скопирован в буфер обмена!")
-
-        ttk.Button(btn_frame, text="📋 Копировать отчёт", 
-                  command=copy_to_clipboard).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(btn_frame, text="✅ Закрыть", 
-                  command=root.destroy).pack(side=tk.RIGHT)
-
-        # Горячие клавиши
-        #root.bind("<Control-c>", lambda e: copy_to_clipboard())
-        root.bind("<Escape>", lambda e: root.destroy())
-
-        root.mainloop()
 
     def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str) -> str:
         """Формирует текстовый отчёт для вывода в GUI/копирования."""
@@ -481,7 +305,7 @@ class PDFAnalyzer:
             for _, frow in file_formats.iterrows():
                 fmt = frow["Стандартный формат"]          # A4, A3, A3×4, Custom1 ...
                 total_pages = int(frow["Страница"])
-                
+                print(f"self.compress_ranges_y = {self.compress_ranges_y}")
                 if self.compress_ranges_y:
                     pages_list = compress_ranges(file_format_details.get(fmt, "-"))
                 else:
@@ -519,6 +343,7 @@ class PDFAnalyzer:
         return "\n".join(lines) 
 
 class MainWindow:
+    
     def __init__(self, analyzer, initial_result=None):
         """
         initial_result:
@@ -527,14 +352,23 @@ class MainWindow:
         """
         self.analyzer = analyzer
         self.root = tk.Tk()
+        
+        icon_path = self.resource_path("icon.png")
+        icon = tk.PhotoImage(file=icon_path)
+        
+        # True — применить ко всем будущим Toplevel
+        self.root.iconphoto(True, icon)
+       
         self.root.title("Анализатор PDF файлов "+version)
         self.root.geometry("900x650")
         self.root.resizable(True, True)
 
+
+
         self.last_result = initial_result  # (df, summary, out_path) или None
 
         self._build_ui()
-
+       
         # если уже есть результат (CLI-сценарий) — сразу показываем его
         if self.last_result is not None:
             df, summary, out_path = self.last_result
@@ -556,22 +390,50 @@ class MainWindow:
         btn_top_frame1 = ttk.Frame(top_frame)
         btn_top_frame1.pack(side=tk.LEFT, anchor=tk.NW)
 
-        ttk.Button(btn_top_frame1, text="Открыть файл", command=self.on_open_file, width=25).pack(side=tk.TOP, padx=5, pady=5)
-        ttk.Button(btn_top_frame1, text="Открыть папку", command=self.on_open_folder, width=25).pack(side=tk.TOP, padx=5, pady=5)
-        ttk.Button(btn_top_frame1, text="?", command=self.show_help_window, width=25).pack(side=tk.TOP, padx=5, pady=5)
+        ttk.Button(btn_top_frame1, text="📂 Открыть файл", command=self.on_open_file, width=25).pack(side=tk.TOP, padx=5, pady=5)
+        ttk.Button(btn_top_frame1, text="📂 Открыть папку", command=self.on_open_folder, width=25).pack(side=tk.TOP, padx=5, pady=5)
+        
+        btn_top_frame2 = ttk.Frame(btn_top_frame1)
+        btn_top_frame2.pack(side=tk.TOP)
+
+        ttk.Button(btn_top_frame2, text="?", command=self.show_help_window, width=7).pack(side=tk.LEFT, padx=5, pady=5)
+        ttk.Button(btn_top_frame2, text="⚙️ Настройки", command=self.open_config_editor, width=15).pack(side=tk.RIGHT, padx=5, pady=5)
 
         # Статус config.yaml справа
-        status_frame = ttk.LabelFrame(top_frame, text="Настройки", padding=10)
+        status_frame = ttk.LabelFrame(top_frame, text="Текущие настройки", padding=10)
         status_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=10)
 
-        self.config_status_label = ttk.Label(
-            status_frame,
-            text=self._get_config_status_text(),
-            justify=tk.LEFT,
-            font=(font_face,10)
-        )
-        self.config_status_label.pack(anchor=tk.SW)
-       
+        status_names_frame = ttk.Frame(status_frame)
+        status_names_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
+
+        self.tolerance_name_label = ttk.Label(status_names_frame, text="Допуск:", font=(font_face, 10))
+        self.tolerance_name_label.pack(anchor=tk.E)
+        self.compress_name_label = ttk.Label(status_names_frame, text="Диапазоны:", font=(font_face, 10))
+        self.compress_name_label.pack(anchor=tk.E)
+        self.formats_count_name_label = ttk.Label(status_names_frame, text="Форматов загруженно:", font=(font_face, 10))
+        self.formats_count_name_label.pack(anchor=tk.E)
+
+        status_values_frame = ttk.Frame(status_frame)
+        status_values_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=10)
+
+        self.tolerance_status_label = ttk.Label(status_values_frame, 
+                                       text="...", 
+                                       font=(font_face, 10))
+        self.tolerance_status_label.pack(anchor=tk.W)
+
+        self.compress_status_label = ttk.Label(status_values_frame, 
+                                            text="...", 
+                                            font=(font_face, 10))
+        self.compress_status_label.pack(anchor=tk.W)
+
+        self.formats_count_status_label = ttk.Label(status_values_frame, 
+                                            text="...", 
+                                            font=(font_face, 10))
+        self.formats_count_status_label.pack(anchor=tk.W)
+
+        # 2. Обновляем статус в интерфейсе
+        self.refresh_config()
+         
         # Центральная область — текст отчёта
         center_frame = ttk.LabelFrame(root, text="Отчёт", padding=10)
         center_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -603,44 +465,47 @@ class MainWindow:
         ttk.Button(bottom_frame, text="Выход", command=root.destroy).pack(side=tk.RIGHT, padx=(5, 0))       
         ttk.Button(bottom_frame, text="💾 Сохранить отчёт", command=self.save_report_to_file).pack(side=tk.RIGHT, padx=(5, 0))
 
-        def hotkeys(event):
+        def hotkeys(event):  # Обработчик нажатий горячих клавиш
             CTRL_MASK = 0x0004  # Control_L
             SHIFT_MASK = 0x0001 # Shift_L
             
             #Debug string
             #print(f"keycode={event.keycode}, state={hex(event.state)}, keysym={event.keysym}")
             
-            # Ctrl+A (keycode=30)
+            # Ctrl+A (keycode=65)
             if (event.state & CTRL_MASK) and event.keycode == 65:
                 self.select_all()
                 return "break"
-            # Ctrl+S (keycode=54)
+            # Ctrl+S (keycode=83)
             elif (event.state & CTRL_MASK) and event.keycode == 83:
                 self.save_report_to_file
                 return "break"
-            # Ctrl+C (keycode=54)
+            # Ctrl+C (keycode=67)
             elif (event.state & CTRL_MASK) and event.keycode == 67:
                 self.stats_text.event_generate("<<Copy>>")
                 return "break"
             return None
         
+        
+        #Статус бар
+        status_frame = ttk.Frame(root, padding=10)
+        status_frame.pack(fill=tk.X)
+        
+        self.status_label = tk.Label(status_frame, text="Готов", font=(font_face, 10), width=15, justify=tk.LEFT)
+        self.status_label.pack(side=tk.LEFT, pady=5, anchor="nw")
+        
+        self.progress = ttk.Progressbar(status_frame, mode='indeterminate')
+        self.progress.pack(pady=10, fill='x', side=tk.RIGHT, expand=True)
+        
+        
         # Горячие клавиши
         self.root.bind("<KeyPress>", hotkeys)
+        self.root.bind("<Escape>", lambda e: root.destroy())
         
-        self.stats_text.focus_set()
+        self.stats_text.focus_set() # Фокус на тексовый отчет
         
         #root.bind("<Control-a>", lambda e: self.select_all())
-        #root.bind("<Control_L-KeyPress-scancode-30>", lambda e: self.select_all())        
         #root.bind("<Control-c>", lambda e: self.stats_text.event_generate("<<Copy>>"))
-        #root.bind("<Control_L-KeyPress-scancode-54>", lambda e: self.stats_text.event_generate("<<Copy>>"))
-
-    def _get_config_status_text(self) -> str:
-        return (
-            f"config.yaml: " + self.analyzer.fileload + "\n"
-            f"Допуск: {self.analyzer.tolerance} мм\n"
-            f"Сжимать диапазоны: {self.analyzer.compress_ranges_y} \n"
-            f"Форматов загруженно: {len(self.analyzer.formats)}"
-        )
 
     def _set_stats_text(self, text: str):
         self.stats_text.config(state=tk.NORMAL)
@@ -668,6 +533,11 @@ class MainWindow:
         self._run_analysis(path)
 
     def _run_analysis(self, path: str):
+        
+        self.progress.start(10)
+        self.status_label.config(text="Обработка PDF...")
+        self.root.update_idletasks()
+        
         try:
             df, summary, out_path = self.analyzer.process_path(path)
             self.last_result = (df, summary, out_path)
@@ -678,6 +548,9 @@ class MainWindow:
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
+            
+        self.progress.stop()
+        self.status_label.config(text="Готово!")
 
     def _save_report_auto(self, df, summary, out_path: str, report_text: str):
         """Автоматически сохраняет отчёт после анализа"""
@@ -690,6 +563,16 @@ class MainWindow:
             print(f"📄 Автосохранение: {txt_path}")
         except Exception as e:
             print(f"⚠️ Автосохранение не удалось: {e}")
+
+    def resource_path(self, relative_path):
+        """Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller"""
+        try:
+            # PyInstaller создаёт временную папку _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        
+        return os.path.join(base_path, relative_path)
 
     def show_help_window(self):
         win = tk.Toplevel(self.root)
@@ -730,21 +613,11 @@ class MainWindow:
         Gitbutton = ttk.Button(Logo_frame, text="Посетить GitHub", command=open_link)
         Gitbutton.pack(side=tk.LEFT, padx=(20,0), pady=5)
 
-        def resource_path(relative_path):
-            """Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller"""
-            try:
-                # PyInstaller создаёт временную папку _MEIPASS
-                base_path = sys._MEIPASS
-            except Exception:
-                base_path = os.path.abspath(".")
-            
-            return os.path.join(base_path, relative_path)
-
         # ЛОГОТИП - ПРАВЫЙ НИЖНИЙ УГОЛ (работает в EXE)
         try:
             from PIL import Image, ImageTk
             
-            logo_path = resource_path("logo.png")
+            logo_path = self.resource_path("logo.png")
             img = Image.open(logo_path)
             #img = img.resize((200, 33), Image.Resampling.LANCZOS)
             logo_img = ImageTk.PhotoImage(img)
@@ -752,14 +625,26 @@ class MainWindow:
             logo_label = tk.Label(Logo_frame, image=logo_img, borderwidth=0)
             logo_label.image = logo_img
             logo_label.pack(anchor="ne", padx=5, pady=5)
-#            logo_label.place(relx=1.0, rely=0.02, anchor="ne", x=-5, y=5)
+            #logo_label.place(relx=1.0, rely=0.02, anchor="ne", x=-5, y=5)
             
         except (ImportError, FileNotFoundError):
             # Текстовый логотип как fallback
             logo_label = tk.Label(Logo_frame, text="🏢 СП-Инновация", 
                                  font=(font_face, 14, "bold"), fg="#2E86AB")
             logo_label.pack(anchor="ne", padx=5, pady=5)
- #           logo_label.place(relx=1.0, rely=0.02, anchor="se", x=-5, y=5)
+            #logo_label.place(relx=1.0, rely=0.02, anchor="se", x=-5, y=5)
+
+    def open_config_editor(self):
+        """Открывает редактор конфигурации"""
+        try:
+            from config_editor import ConfigEditor
+            editor = ConfigEditor(parent=self.root)
+            editor.grab_set()  # модальное окно
+            editor.wait_window()  # ждем закрытия
+            print("✅ ConfigEditor закрыт")
+            self.refresh_config()  # перезагружаем настройки
+        except ImportError as e:
+            messagebox.showerror("Ошибка", f"Не найден config_editor.py:\n{str(e)}")
 
     def select_all(self):
         self.stats_text.config(state=tk.NORMAL)
@@ -795,6 +680,140 @@ class MainWindow:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить:\n{e}")
 
+    def refresh_config(self):
+        """Перезагружает config.yaml и обновляет состояние приложения"""
+        try:
+            # 1. Перезагружаем конфиг
+            self.config = self._load_config()
+            self.analyzer.compress_ranges_y = self.config.get('compress_ranges', True)
+            print(f"self.analyzer.compress_ranges_y = {self.analyzer.compress_ranges_y}")
+            print(f"✅ Конфиг перезагружен:")
+            print(f"   📐 tolerance_mm: {self.config.get('tolerance_mm', 5.0)}")
+            print(f"   📦 compress_ranges: {self.config.get('compress_ranges', True)}")
+            print(f"   📚 форматов загружено: {len(self.config.get('formats', {}))}")
+            
+            # 2. Обновляем статус в интерфейсе
+            self._update_config_status()
+            
+            # 3. Если есть результаты анализа - пересчитываем
+            if hasattr(self, 'results_text') and self.results_text.get(1.0, tk.END).strip():
+                self._update_results_display()
+                
+            #messagebox.showinfo("✅ Конфигурация", 
+            #                f"Обновлено:\n"
+            #                f"• Допуск: {self.config['tolerance_mm']} мм\n"
+            #                f"• Сжатие диапазонов: {'Вкл' if self.config['compress_ranges'] else 'Выкл'}")
+            #                f"• Форматов загружено: {len(self.config['formats'])}")
+
+        except Exception as e:
+            print(f"❌ Ошибка refresh_config: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось обновить конфиг:\n{str(e)}")
+
+    def _load_config(self) -> Dict[str, Any]:
+        """Загружает config.yaml (тот же код что в ConfigEditor)"""
+        possible_paths = [
+            Path("config.yaml"),
+            Path(__file__).parent / "config.yaml",
+            Path.cwd() / "config.yaml",
+        ]
+        
+        config_path = None
+        for path in possible_paths:
+            if path.exists():
+                config_path = path
+                break
+        
+        if config_path is None:
+            config_path = Path("config.yaml")
+        
+        default_config = {
+            "tolerance_mm": 5.0,
+            "compress_ranges": True,
+            "formats": {
+                "A0": [841, 1189],
+                "A0×2": [1189, 1682],
+                "A0×3": [1189, 2523],
+                "A1": [594, 841],
+                "A1×3": [841, 1783],
+                "A1×4": [841, 2378],
+                "A2": [420, 594],
+                "A2×3": [594, 1261],
+                "A2×4": [594, 1682],
+                "A2×5": [594, 2102],
+                "A3": [297, 420],
+                "A3×3": [420, 891],
+                "A3×4": [420, 1189],
+                "A3×5": [420, 1486],
+                "A3×6": [420, 1783],
+                "A3×7": [420, 2080],
+                "A4": [210, 297],
+                "A4×3": [297, 630],
+                "A4×4": [297, 841],
+                "A4×5": [297, 1051],
+                "A4×6": [297, 1261],
+                "A4×7": [297, 1471],
+                "A4×8": [297, 1682],
+                "A4×9": [297, 1892],
+                "A5": [148, 210]
+            }
+        }
+        
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+        except Exception:
+            config = {}
+        
+        return {**default_config, **config}
+
+    def _update_config_status(self):
+        """Обновляет индикаторы конфигурации в интерфейсе"""
+        try:
+            # Статус допуска
+            tolerance_status = self.config.get('tolerance_mm', 5.0)
+            tolerance_label = getattr(self, 'tolerance_status_label', None)
+            if tolerance_label:
+                tolerance_label.config(
+                    text=f"{tolerance_status} мм",
+                    foreground="green"
+                )
+            
+            # Статус сжатия диапазонов
+            compress_status = self.config.get('compress_ranges', True)
+
+            compress_label = getattr(self, 'compress_status_label', None)
+            if compress_label:
+                compress_label.config(
+                    text=f"{'Сжатие ВКЛ' if compress_status else 'По отдельности'}",
+                    foreground="green" if compress_status else "orange"
+                )
+            
+            # Статус количества форматов
+            formats_count_status = len(self.config.get('formats', {}))
+            formats_count_label = getattr(self, 'formats_count_status_label', None)
+            if formats_count_label:
+                formats_count_label.config(
+                    text=f"{formats_count_status}",
+                    foreground="green"
+                )
+
+        except Exception as e:
+            print(f"⚠️ Ошибка обновления статуса: {e}")
+
+    def _update_results_display(self):
+        """Пересчитывает отображение результатов с новым compress_ranges"""
+        if not hasattr(self, 'analyzer') or not self.analyzer:
+            return
+            
+        # Пересчитываем с новыми настройками
+        self.analyzer.config = self.config
+        formats_data = self.analyzer.analyze_all()
+        
+        # Обновляем Text виджет
+        self.results_text.delete(1.0, tk.END)
+        report = self.analyzer.build_report_text(formats_data)
+        self.results_text.insert(1.0, report)
+
     # ---------- запуск ----------
 
     def run(self):
@@ -812,8 +831,8 @@ def main():
             app.run()
         except Exception as e:
             # даже в CLI-сценарии покажем нормальное окно об ошибке
-            import tkinter as tk
-            from tkinter import messagebox
+            #import tkinter as tk
+            #from tkinter import messagebox
             root = tk.Tk()
             root.withdraw()
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
