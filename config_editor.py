@@ -90,19 +90,36 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
                 "A0": [841, 1189],
                 "A0×2": [1189, 1682],
                 "A0×3": [1189, 2523],
+                "A0×4": [1189, 3364],
+                "A0×5": [1189, 4205],
+                "A0×6": [1189, 5046],
+                "A0×7": [1189, 5887],
+                "A0×8": [1189, 6728],
+                "A0×9": [1189, 7569],
                 "A1": [594, 841],
                 "A1×3": [841, 1783],
                 "A1×4": [841, 2378],
+                "A1×5": [841, 2973],
+                "A1×6": [841, 3568],
+                "A1×7": [841, 4162],
+                "A1×8": [841, 4758],
+                "A1×9": [841, 5353],
                 "A2": [420, 594],
                 "A2×3": [594, 1261],
                 "A2×4": [594, 1682],
                 "A2×5": [594, 2102],
+                "A2×6": [594, 2523],
+                "A2×7": [594, 2943],
+                "A2×8": [594, 3364],
+                "A2×9": [594, 3784],                
                 "A3": [297, 420],
                 "A3×3": [420, 891],
                 "A3×4": [420, 1189],
                 "A3×5": [420, 1486],
                 "A3×6": [420, 1783],
                 "A3×7": [420, 2080],
+                "A3×8": [420, 2378],
+                "A3×9": [420, 2676],                
                 "A4": [210, 297],
                 "A4×3": [297, 630],
                 "A4×4": [297, 841],
@@ -241,15 +258,15 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
 
         names_frame = ttk.Frame(dimensions_frame)
         names_frame.pack(fill=tk.X, side=tk.LEFT)
-        ttk.Label(names_frame, justify=tk.RIGHT, text="Ширина (мм):", font=(font_face, 10)).pack(side=tk.TOP, anchor=tk.E, pady=(0, 5))
         ttk.Label(names_frame, justify=tk.RIGHT, text="Высота (мм):", font=(font_face, 10)).pack(side=tk.TOP, anchor=tk.E, pady=(0, 5))
+        ttk.Label(names_frame, justify=tk.RIGHT, text="Ширина (мм):", font=(font_face, 10)).pack(side=tk.TOP, anchor=tk.E, pady=(0, 5))
 
         entrys_frame = ttk.Frame(dimensions_frame)
         entrys_frame.pack(fill=tk.X, expand=True, side=tk.RIGHT)
         self.format_width_var = tk.DoubleVar()
-        ttk.Entry(entrys_frame, textvariable=self.format_width_var, width=12, font=(font_face, 10)).pack(side=tk.TOP, padx=(5, 0), pady=(0, 5))
         self.format_height_var = tk.DoubleVar()
         ttk.Entry(entrys_frame, textvariable=self.format_height_var, width=12, font=(font_face, 10)).pack(side=tk.TOP, padx=(5, 0), pady=(0, 5))
+        ttk.Entry(entrys_frame, textvariable=self.format_width_var, width=12, font=(font_face, 10)).pack(side=tk.TOP, padx=(5, 0), pady=(0, 5))
         
         self.edit_btn = ttk.Button(right_frame, text="Сохранить", command=self.edit_format)
         self.edit_btn.pack(side=tk.LEFT, padx=(0, 5))
@@ -323,7 +340,7 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         idx = sel[0]
         # безопасно получить имя формата (используем список ключей)
         name = list(self.config["formats"].keys())[idx]
-        w, h = self.config["formats"][name]
+        h, w = self.config["formats"][name]
 
         self.format_name_var.set(name)
         self.format_width_var.set(w)

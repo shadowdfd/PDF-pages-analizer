@@ -1,5 +1,8 @@
 import os
 import sys
+from typing import Dict, Any
+import subprocess
+import platform
 import fitz  # PyMuPDF
 import pandas as pd
 import yaml
@@ -11,16 +14,32 @@ import webbrowser
 
 pt_to_mm = 0.3528
 font_face = "Calibri"
-version = "v.1.3.0"
+version = "v.1.4.0"
 config_path="config.yaml"
+use_sheet_rotation=False
 
 class PDFAnalyzer:
     
     def __init__(self, config_path="config.yaml"):
+        
+        # Загружаем конфиг
         self.config = self.load_config(config_path)
-        self.tolerance = self.config["tolerance_mm"]
-        self.compress_ranges_y = self.config["compress_ranges"]
-        self.formats = {k: tuple(v) for k, v in self.config["formats"].items()}
+        
+        # Проверка на None - используем defaults если конфиг пуст
+        if not self.config:
+            default_config = {
+                "tolerance_mm": 5.0,
+                "compress_ranges": True,
+                "formats": {}
+            }
+            self.config = default_config
+
+        # Получаем настройки
+        self.tolerance = self.config.get("tolerance_mm", 5.0)
+        self.compress_ranges_y = self.config.get("compress_ranges", True)
+        self.formats = {k: tuple(v) for k, v in self.config.get("formats", {}).items()}
+
+        #Обнуляем статистику
         self.stats = {
             "files_processed": 0,
             "pages_processed": 0,
@@ -30,6 +49,7 @@ class PDFAnalyzer:
 
     def load_config(self, config_path):
         """Загружает конфигурацию из YAML"""
+        
         # Конфиг по умолчанию
         default_config = {
             "tolerance_mm": 5.0,
@@ -62,25 +82,25 @@ class PDFAnalyzer:
                 "A5": [148, 210]
             }
         }
+        
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-                config["fileload"] = "загружен"
             return {**default_config, **config}
         except FileNotFoundError:
-            print(f"config.yaml не найден, используются значения по умолчанию")
-            messagebox.showerror("Файл конфигурации", "Файл конфигурации config.yaml не найден, используются значения по умолчанию.")
+            # print(f"config.yaml не найден, используются значения по умолчанию")
+            messagebox.showerror("Файл конфигурации", "Файл конфигурации config.yaml не найден. Будет создан файл конфигурации с настройками по умолчанию")
             return default_config
         except Exception as e:
-            print(f"Ошибка чтения config.yaml: {e}")
-            messagebox.showerror("Файл конфигурации", "Ошибка чтения config.yaml: "+ str(e) + "\n Используются значения по умолчанию.")
+            print(f"Ошибка при попытке чтения config.yaml: {e}")
+            messagebox.showerror("Файл конфигурации", "Ошибка при попытке чтения config.yaml: "+ str(e) + "\n Используются значения по умолчанию.")
             return default_config
 
     def get_standard_format(self, w_mm: float, h_mm: float) -> tuple[str, str]:
-        """Custom1, Custom2... для нестандартных размеров"""
+        """Определяет формат из настроек либо создаёт новый Custom1, Custom2... для нестандартных размеров"""
         
         # Стандартные форматы
-        for name, (sw, sh) in self.formats.items():
+        for name, (sh, sw) in self.formats.items():
             if (abs(w_mm - sw) <= self.tolerance and abs(h_mm - sh) <= self.tolerance) or \
                (abs(w_mm - sh) <= self.tolerance and abs(h_mm - sw) <= self.tolerance):
                 if w_mm <= h_mm:
@@ -115,16 +135,166 @@ class PDFAnalyzer:
                         r, g, b = col[:3]
                         if not (abs(r - g) < 1e-3 and abs(g - b) < 1e-3):
                             return "Цветная"
-        except:
+        except Exception:
+            # Ошибка при анализе цвета - считаем ч/б
             pass
         return "Ч/Б"
 
-    def process_pdf(self, pdf_path: str, all_data: list) -> None:
+    def compress_ranges(self, input_str):
+        # Парсим строку в список чисел
+        if not input_str or input_str == "-":
+            return "-"
         
+        nums = [int(x.strip()) for x in input_str.split(',')]
+        
+        nums.sort()  # Сортируем на всякий случай
+        
+        if not nums:
+            return ""
+        
+        ranges = []
+        start = nums[0]
+        prev = nums[0]
+        
+        for num in nums[1:]:
+            if num != prev + 1:  # Разрыв последовательности
+                if start == prev:
+                    ranges.append(str(start))  # Одиночное число
+                else:
+                    ranges.append(f"{start}-{prev}")
+                start = num
+            prev = num
+        
+        # Добавляем последний диапазон
+        if start == prev:
+            ranges.append(str(start))
+        else:
+            ranges.append(f"{start}-{prev}")
+        
+        return ','.join(ranges)
+
+    def expand_ranges(self, input_str: str) -> list:
+        """Расширяет сжатый диапазон в список чисел. Например: '1-2,6-8' -> [1,2,6,7,8]"""
+        if not input_str or input_str == "-":
+            return []
+        
+        result = []
+        for part in input_str.split(','):
+            part = part.strip()
+            if '-' in part:
+                # Это диапазон - используем rsplit для правильного парсинга
+                try:
+                    parts = part.rsplit('-', 1)
+                    if len(parts) == 2:
+                        start, end = map(int, parts)
+                        result.extend(range(start, end + 1))
+                except (ValueError, IndexError):
+                    pass
+            else:
+                # Это одиночное число
+                try:
+                    result.append(int(part))
+                except ValueError:
+                    pass
+        
+        return sorted(set(result))
+
+    def classify_by_roll_format(self, w_mm: float, h_mm: float, std_format: str) -> str:
+        """Классифицирует лист по формату рулона, определяя по меньшей стороне листа.
+        
+        Параметры:
+            w_mm: ширина листа (мм)
+            h_mm: высота листа (мм)
+            std_format: название стандартного формата (для исключений A4 и A3)
+        
+        Исключения: A4 и A3 возвращают 'Нестандартный'
+        
+        Группы по меньшей стороне формата:
+        - 297мм: листы с меньшей стороной ~297мм
+        - 420мм: листы с меньшей стороной ~420мм
+        - 594мм: листы с меньшей стороной ~594мм
+        - 841мм: листы с меньшей стороной ~841мм
+        
+        Возвращает: '297мм', '420мм', '594мм', '841мм' или 'Нестандартный'
+        """
+        # Исключаем только A4 и A3
+        if std_format in ("A4", "A3"):
+            return "Нестандартный"
+        
+        # Определяем меньшую сторону
+        min_side = min(w_mm, h_mm)
+        
+        # Классифицируем по меньшей стороне с допуском
+        tolerance = self.tolerance
+        
+        if abs(min_side - 297) <= tolerance:
+            return "297мм"
+        elif abs(min_side - 420) <= tolerance:
+            return "420мм"
+        elif abs(min_side - 594) <= tolerance:
+            return "594мм"
+        elif abs(min_side - 841) <= tolerance:
+            return "841мм"
+        else:
+            return "Отдельный лист"
+
+    def build_roll_summary(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Строит сводку по форматам рулонов."""
+        
+        # Добавляем классификацию по рулону (передаём размеры и формат)
+        df_filtered = df.copy()
+        df_filtered["Формат рулона"] = df_filtered.apply(
+            lambda row: self.classify_by_roll_format(
+                row["Ширина (мм)"],
+                row["Высота (мм)"],
+                row["Стандартный формат"]
+            ),
+            axis=1
+        )
+        
+        # Исключаем "Нестандартный" из сводки
+        df_filtered = df_filtered[~df_filtered["Формат рулона"].isin(["Отдельный лист"])]
+        
+        if df_filtered.empty:
+            return pd.DataFrame()
+        
+        # Группировка: Файл + Формат рулона + Стандартный формат
+        def get_page_list(group: pd.DataFrame, color: str) -> str:
+            pages = sorted(group[group["Цветность"] == color]["Страница"].tolist())
+            return ", ".join(map(str, pages)) if pages else "-"
+        
+        roll_summary_data = []
+        for (roll_format, std_format, file_name), group in df_filtered.groupby(
+            ["Формат рулона", "Стандартный формат", "Файл"]
+        ):
+            pages_list_bw = get_page_list(group, "Ч/Б")
+            pages_list_col = get_page_list(group, "Цветная")
+            
+            # НЕ сжимаем здесь - будем сжимать только в текстовом отчёте
+            # Храним оригинальные диапазоны страниц
+            
+            roll_summary_data.append({
+                "Файл": file_name,
+                "Формат рулона": roll_format,
+                "Стандартный формат": std_format,
+                "Размер стандарта": group["Размер стандарта"].iloc[0],
+                "Количество": len(group),
+                "Ч/Б страницы": pages_list_bw,
+                "Цветные страницы": pages_list_col,
+                "Цветных": (group["Цветность"] == "Цветная").sum(),
+                "Ч/Б": (group["Цветность"] == "Ч/Б").sum(),
+            })
+        
+        return pd.DataFrame(roll_summary_data).sort_values(
+            ["Файл", "Формат рулона", "Стандартный формат"]
+        ).reset_index(drop=True)
+
+    def process_pdf(self, pdf_path: str, all_data: list) -> None:
         """Обрабатывает один PDF файл"""
+        
         try:
             self.stats["files_processed"] += 1
-            print(f"Обрабатываем: {os.path.basename(pdf_path)}")
+            # print(f"Обрабатываем: {os.path.basename(pdf_path)}")
             doc = fitz.open(pdf_path)
             self.stats["pages_processed"] += len(doc)
 
@@ -133,10 +303,14 @@ class PDFAnalyzer:
                 rect = page.rect
                 w_pt, h_pt = rect.width, rect.height
 
-                if rotation in (90, 270):
+                if use_sheet_rotation and rotation in (90, 270):
                     width_mm = round(h_pt * pt_to_mm, 1)
                     height_mm = round(w_pt * pt_to_mm, 1)
                 else:
+                    if w_pt < h_pt:
+                        temp1 = w_pt
+                        w_pt = h_pt
+                        h_pt = temp1
                     width_mm = round(w_pt * pt_to_mm, 1)
                     height_mm = round(h_pt * pt_to_mm, 1)
 
@@ -154,16 +328,17 @@ class PDFAnalyzer:
                     "Цветность": color_type,
                 })
             doc.close()
+        
         except Exception as e:
             self.stats["errors"].append(f"{pdf_path}: {str(e)}")
             print(f"Ошибка в {pdf_path}: {e}")
 
-    def process_path(self, path: str) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    def process_path(self, path: str) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
         """Главная функция обработки"""
+        
         all_data = []
-        self.config = self.load_config(config_path)
+        self.config = self.load_config("config.yaml")  # Загружаем свежий конфиг
         path_obj = Path(path)
-
 
         if path_obj.is_file() and path_obj.suffix.lower() == ".pdf":
             self.process_pdf(str(path_obj), all_data)
@@ -193,30 +368,43 @@ class PDFAnalyzer:
             return ", ".join(map(str, pages)) if pages else "-"
 
         summary_data = []
-        for (format_name, file_name), group in df.groupby(["Стандартный формат", "Файл"]):
+        for (format_name, std_size, file_name), group in df.groupby(["Стандартный формат", "Размер стандарта", "Файл"]):
+            pages_list_bw = get_page_list(group, "Ч/Б")
+            pages_list_col = get_page_list(group, "Цветная")           
+            
+            if self.compress_ranges_y:
+                if pages_list_bw != "-": pages_list_bw = self.compress_ranges(pages_list_bw)
+                if pages_list_col != "-": pages_list_col = self.compress_ranges(pages_list_col)
+
             summary_data.append({
                 "Файл": file_name,
                 "Стандартный формат": format_name,
                 "Количество": len(group),
-                "Ч/Б страницы": get_page_list(group, "Ч/Б"),
-                "Цветные страницы": get_page_list(group, "Цветная"),
+                "Размер стандарта": std_size,
+                "Ч/Б страницы": pages_list_bw,
+                "Цветные страницы": pages_list_col,
                 "Цветных": (group["Цветность"] == "Цветная").sum(),
                 "Ч/Б": (group["Цветность"] == "Ч/Б").sum(),
             })
 
         summary = pd.DataFrame(summary_data).sort_values(["Файл", "Стандартный формат"]).reset_index(drop=True)
-        
+
+        # СВОДКА ПО РУЛОНАМ (исключая A4)
+        roll_summary = self.build_roll_summary(df)
+
         out_path = out_dir / f"{base_name}_all_sizes.xlsx"
 
         with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Все страницы")
             summary.to_excel(writer, index=False, sheet_name="Сводка ЕСКД")
+            if not roll_summary.empty:
+                roll_summary.to_excel(writer, index=False, sheet_name="Сводка по рулонам")
 
-        
-        return df, summary, str(out_path)
+        return df, summary, str(out_path), roll_summary
 
-    def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str) -> str:
+    def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str, roll_summary: pd.DataFrame = None) -> str:
         """Формирует текстовый отчёт для вывода в GUI/копирования."""
+        
         lines: list[str] = []
 
         # Заголовок и общая статистика
@@ -261,37 +449,8 @@ class PDFAnalyzer:
         # 📐 Форматы по файлам (как вы просили)
         lines.append("📐 ФОРМАТЫ ПО ФАЙЛАМ:")
 
-        def compress_ranges(input_str):
-            # Парсим строку в список чисел
-            nums = [int(x.strip()) for x in input_str.split(',')]
-            nums.sort()  # Сортируем на всякий случай
-            
-            if not nums:
-                return ""
-            
-            ranges = []
-            start = nums[0]
-            prev = nums[0]
-            
-            for num in nums[1:]:
-                if num != prev + 1:  # Разрыв последовательности
-                    if start == prev:
-                        ranges.append(str(start))  # Одиночное число
-                    else:
-                        ranges.append(f"{start}-{prev}")
-                    start = num
-                prev = num
-            
-            # Добавляем последний диапазон
-            if start == prev:
-                ranges.append(str(start))
-            else:
-                ranges.append(f"{start}-{prev}")
-            
-            return ','.join(ranges)
-        
         for file_name, file_group in df.groupby("Файл"):
-            lines.append(f"\n    {file_name}:")
+            lines.append(f"\n    📄 {file_name}:")
 
             # --- ОТДЕЛЬНЫЕ ФОРМАТЫ ВНУТРИ ФАЙЛА ---
             file_formats = file_group.groupby("Стандартный формат").agg({
@@ -299,15 +458,15 @@ class PDFAnalyzer:
             }).reset_index()
 
             file_format_details = file_group.groupby("Стандартный формат")["Страница"].apply(
-                lambda x: ", ".join(map(str, sorted(x.tolist())))
+                lambda x: ",".join(map(str, sorted(x.tolist())))
             ).to_dict()
 
             for _, frow in file_formats.iterrows():
                 fmt = frow["Стандартный формат"]          # A4, A3, A3×4, Custom1 ...
                 total_pages = int(frow["Страница"])
-                print(f"self.compress_ranges_y = {self.compress_ranges_y}")
+                # print(f"self.compress_ranges_y = {self.compress_ranges_y}")
                 if self.compress_ranges_y:
-                    pages_list = compress_ranges(file_format_details.get(fmt, "-"))
+                    pages_list = self.compress_ranges(file_format_details.get(fmt, "-"))
                 else:
                     pages_list = file_format_details.get(fmt, "-")                
                 
@@ -323,13 +482,68 @@ class PDFAnalyzer:
                 color_a4a3 = int((a4a3_group["Цветность"] == "Цветная").sum())
                 
                 if self.compress_ranges_y:
-                    pages_a4a3 = compress_ranges(",".join(map(str, sorted(a4a3_group["Страница"].tolist()))))
+                    pages_a4a3 = self.compress_ranges(",".join(map(str, sorted(a4a3_group["Страница"].tolist()))))
                 else:
                     pages_a4a3 = ",".join(map(str, sorted(a4a3_group["Страница"].tolist())))                 
                
                 lines.append(f"        A4 + A3 ({total_a4a3} стр.): {pages_a4a3}")
 
         lines.append("")
+
+        # 🧻 СВОДКА ПО РУЛОНАМ
+        if roll_summary is not None and not roll_summary.empty:
+            lines.append("🧻 СВОДКА ПО РУЛОНАМ:")
+            
+            # Группировка сначала по файлу, потом по формату рулона
+            for file_name, file_group in roll_summary.groupby("Файл"):
+                lines.append(f"\n    📄 {file_name}:")
+                
+                for roll_fmt, roll_group in file_group.groupby("Формат рулона"):
+                    # Пропускаем "Нестандартный" рулон
+                    if roll_fmt == "Нестандартный":
+                        continue
+                    
+                    total_in_roll = int(roll_group["Количество"].sum())
+                    
+                    # Собираем все страницы для этого рулона (расширяя диапазоны)
+                    all_pages_for_roll = []
+                    for _, row in roll_group.iterrows():
+                        bw_pages = row["Ч/Б страницы"]
+                        all_pages_for_roll.extend(self.expand_ranges(bw_pages))
+                        
+                        col_pages = row["Цветные страницы"]
+                        all_pages_for_roll.extend(self.expand_ranges(col_pages))
+                    
+                    # Сортируем и форматируем список страниц
+                    all_pages_for_roll = sorted(set(all_pages_for_roll))
+                    if self.compress_ranges_y and all_pages_for_roll:
+                        pages_for_roll_str = self.compress_ranges(",".join(map(str, all_pages_for_roll)))
+                    else:
+                        pages_for_roll_str = ",".join(map(str, all_pages_for_roll)) if all_pages_for_roll else "-"
+                    
+                    lines.append(f"        🧻 Рулон {roll_fmt}: {total_in_roll} стр.: {pages_for_roll_str}")
+                    
+                    for _, row in roll_group.iterrows():
+                        fmt = row["Стандартный формат"]
+                        size = row["Размер стандарта"]
+                        count = int(row["Количество"])
+                        bw_pages = row["Ч/Б страницы"]
+                        col_pages = row["Цветные страницы"]
+                        
+                        # Объединяем ч/б и цветные страницы (расширяя диапазоны)
+                        fmt_pages = self.expand_ranges(bw_pages) + self.expand_ranges(col_pages)
+                        fmt_pages = sorted(set(fmt_pages))
+                        
+                        if self.compress_ranges_y and fmt_pages:
+                            fmt_pages_str = self.compress_ranges(",".join(map(str, fmt_pages)))
+                        else:
+                            fmt_pages_str = ",".join(map(str, fmt_pages)) if fmt_pages else "-"
+                        
+                        lines.append(
+                            f"                {fmt} {size} ({count} стр.): {fmt_pages_str}"
+                        )
+            
+            lines.append("")
 
         # Ошибки (если были)
         errors = self.stats.get("errors", [])
@@ -353,11 +567,14 @@ class MainWindow:
         self.analyzer = analyzer
         self.root = tk.Tk()
         
-        icon_path = self.resource_path("icon.png")
-        icon = tk.PhotoImage(file=icon_path)
-        
-        # True — применить ко всем будущим Toplevel
-        self.root.iconphoto(True, icon)
+        # Загружаем иконку с fallback
+        try:
+            icon_path = self.resource_path("icon.png")
+            icon = tk.PhotoImage(file=icon_path)
+            self.root.iconphoto(True, icon)
+        except Exception:
+            # Если иконка не найдена, продолжаем без неё
+            pass
        
         self.root.title("Анализатор PDF файлов "+version)
         self.root.geometry("900x650")
@@ -371,8 +588,8 @@ class MainWindow:
        
         # если уже есть результат (CLI-сценарий) — сразу показываем его
         if self.last_result is not None:
-            df, summary, out_path = self.last_result
-            report_text = self.analyzer.build_report_text(df, summary, out_path)
+            df, summary, out_path, roll_summary = self.last_result
+            report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
         else:
             self._set_stats_text("Выберите файл или папку для анализа PDF документов.")
@@ -462,31 +679,11 @@ class MainWindow:
 
         ttk.Button(bottom_frame, text="Выделить всё", command=self.select_all).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(bottom_frame, text="Копировать отчёт", command=self.copy_report).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(bottom_frame, text="📊 Excel отчет", command=self.open_excel_report).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(bottom_frame, text="📁 Папка отчетов", command=self.open_reports_folder).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(bottom_frame, text="Выход", command=root.destroy).pack(side=tk.RIGHT, padx=(5, 0))       
         ttk.Button(bottom_frame, text="💾 Сохранить отчёт", command=self.save_report_to_file).pack(side=tk.RIGHT, padx=(5, 0))
 
-        def hotkeys(event):  # Обработчик нажатий горячих клавиш
-            CTRL_MASK = 0x0004  # Control_L
-            SHIFT_MASK = 0x0001 # Shift_L
-            
-            #Debug string
-            #print(f"keycode={event.keycode}, state={hex(event.state)}, keysym={event.keysym}")
-            
-            # Ctrl+A (keycode=65)
-            if (event.state & CTRL_MASK) and event.keycode == 65:
-                self.select_all()
-                return "break"
-            # Ctrl+S (keycode=83)
-            elif (event.state & CTRL_MASK) and event.keycode == 83:
-                self.save_report_to_file
-                return "break"
-            # Ctrl+C (keycode=67)
-            elif (event.state & CTRL_MASK) and event.keycode == 67:
-                self.stats_text.event_generate("<<Copy>>")
-                return "break"
-            return None
-        
-        
         #Статус бар
         status_frame = ttk.Frame(root, padding=10)
         status_frame.pack(fill=tk.X)
@@ -497,15 +694,28 @@ class MainWindow:
         self.progress = ttk.Progressbar(status_frame, mode='indeterminate')
         self.progress.pack(pady=10, fill='x', side=tk.RIGHT, expand=True)
         
+        # Контекстное меню (ПКМ)
+        self.context_menu = tk.Menu(self.stats_text, tearoff=0)
+        self.context_menu.add_command(label="Копировать", command=self.copy_selection)
+        self.context_menu.add_command(label="Выделить всё", command=self.select_all)
         
-        # Горячие клавиши
-        self.root.bind("<KeyPress>", hotkeys)
+        def show_context_menu(event):
+            try:
+                self.context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.context_menu.grab_release()
+        
+        self.stats_text.bind("<Button-3>", show_context_menu)
+        
+        # Горячие клавиши на самом виджете stats_text (работают при любой раскладке)
+        self.stats_text.bind("<Control-a>", lambda e: (self.select_all(), "break")[1])
+        self.stats_text.bind("<Control-c>", lambda e: (self.copy_selection(), "break")[1])
+        
+        # Горячие клавиши на root (общие для приложения)
+        self.root.bind("<Control-s>", lambda e: self.save_report_to_file())
         self.root.bind("<Escape>", lambda e: root.destroy())
         
         self.stats_text.focus_set() # Фокус на тексовый отчет
-        
-        #root.bind("<Control-a>", lambda e: self.select_all())
-        #root.bind("<Control-c>", lambda e: self.stats_text.event_generate("<<Copy>>"))
 
     def _set_stats_text(self, text: str):
         self.stats_text.config(state=tk.NORMAL)
@@ -539,12 +749,12 @@ class MainWindow:
         self.root.update_idletasks()
         
         try:
-            df, summary, out_path = self.analyzer.process_path(path)
-            self.last_result = (df, summary, out_path)
-            report_text = self.analyzer.build_report_text(df, summary, out_path)
+            df, summary, out_path, roll_summary = self.analyzer.process_path(path)
+            self.last_result = (df, summary, out_path, roll_summary)
+            report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
              # 🆕 АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ТЕКСТОВОГО ОТЧЁТА
-            self._save_report_auto(df, summary, out_path, report_text)           
+            self._save_report_auto(df, summary, out_path, report_text, roll_summary)           
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
@@ -552,7 +762,7 @@ class MainWindow:
         self.progress.stop()
         self.status_label.config(text="Готово!")
 
-    def _save_report_auto(self, df, summary, out_path: str, report_text: str):
+    def _save_report_auto(self, df, summary, out_path: str, report_text: str, roll_summary=None):
         """Автоматически сохраняет отчёт после анализа"""
         base_name = Path(out_path).stem
         txt_path = Path(out_path).parent / f"{base_name}_report.txt"
@@ -577,7 +787,7 @@ class MainWindow:
     def show_help_window(self):
         win = tk.Toplevel(self.root)
         win.title("Помощь")
-        win.geometry("500x400")
+        win.geometry("500x450")
 
         instr_frame = ttk.LabelFrame(win, text="Инструкция", padding="10")
         instr_frame.pack(fill=tk.X, anchor="nw", expand=True, padx=5, pady=5)       
@@ -589,7 +799,8 @@ class MainWindow:
             " 3. После обработки создаётся Excel-файл с листами:\n"
             "   - «Все страницы» — детальная информация по страницам\n"
             "   - «Сводка ЕСКД» — сводка по форматам и цветности\n"
-            "   Также создаётся текстовый файл с отчетом.\n"          
+            "   - «Сводка по рулонам» — сводка по распределению страниц по рулонам\n"
+            "   Также создаётся текстовый файл с отчетом.\n"        
             " 4. Форматы распознаются по ГОСТ 2.301-68 (A0, A1, A4×3 и т.д.)\n"
             " 5. В основном окне отображается текстовый отчёт — его можно частично или полностью выделить и скопировать.\n"
             " 6. Параметры допуска и список стандартных форматов задаются в файле config.yaml.\n"
@@ -619,7 +830,6 @@ class MainWindow:
             
             logo_path = self.resource_path("logo.png")
             img = Image.open(logo_path)
-            #img = img.resize((200, 33), Image.Resampling.LANCZOS)
             logo_img = ImageTk.PhotoImage(img)
             
             logo_label = tk.Label(Logo_frame, image=logo_img, borderwidth=0)
@@ -651,9 +861,31 @@ class MainWindow:
         self.stats_text.tag_add("sel", "1.0", "end")
         self.stats_text.config(state=tk.DISABLED)
 
+    def copy_selection(self):
+        """Копирует выделенный текст или весь текст, если ничего не выделено"""
+        try:
+            # Пытаемся скопировать выделенный текст
+            text = self.stats_text.get(tk.SEL_FIRST, tk.SEL_LAST)
+        except tk.TclError:
+            # Если ничего не выделено - копируем всё (с подтверждением)
+            response = messagebox.askyesno("Копирование", "Текст не выделен.\n\nКопировать весь текст?")
+            if response:
+                text = self.stats_text.get("1.0", tk.END).strip()
+            else:
+                return
+        
+        if text:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            print(f"📋 Скопировано {len(text)} символов")
+        else:
+            messagebox.showwarning("Отчёт пуст", "Нет текста для копирования")
+
     def copy_report(self):
+        """Копирует весь текст отчёта"""
         text = self.stats_text.get("1.0", tk.END).strip()
         if not text:
+            messagebox.showwarning("Отчёт пуст", "Нечего копировать")
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
@@ -664,8 +896,8 @@ class MainWindow:
         if not self.last_result:
             messagebox.showwarning("Предупреждение", "Сначала выполните анализ!")
             return
-        
-        df, summary, out_path = self.last_result
+
+        df, summary, out_path, roll_summary = self.last_result
         report_text = self.stats_text.get("1.0", tk.END).strip()
         
         # Имя файла: тот же base_name + _report.txt
@@ -679,6 +911,47 @@ class MainWindow:
             print(f"📄 Текстовый отчёт: {txt_path}")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить:\n{e}")
+
+    def open_excel_report(self):
+        """Открывает последний Excel отчёт"""
+        if not self.last_result:
+            messagebox.showwarning("Предупреждение", "Сначала выполните анализ!")
+            return
+        
+        _, _, out_path, _ = self.last_result
+        
+        try:
+            # Открываем файл стандартным обработчиком
+            if platform.system() == "Windows":
+                os.startfile(out_path)
+            elif platform.system() == "Darwin":
+                subprocess.run(['open', out_path])
+            else:
+                subprocess.run(['xdg-open', out_path])
+            print(f"📊 Открыт Excel: {out_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть файл:\n{e}")
+
+    def open_reports_folder(self):
+        """Открывает папку с отчётами в проводнике"""
+        if not self.last_result:
+            messagebox.showwarning("Предупреждение", "Сначала выполните анализ!")
+            return
+        
+        _, _, out_path, _ = self.last_result
+        folder_path = str(Path(out_path).parent)
+        
+        try:
+            # Открываем папку в стандартном проводнике
+            if platform.system() == "Windows":
+                os.startfile(folder_path)
+            elif platform.system() == "Darwin":
+                subprocess.run(['open', folder_path])
+            else:
+                subprocess.run(['xdg-open', folder_path])
+            print(f"📁 Открыта папка: {folder_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть папку:\n{e}")
 
     def refresh_config(self):
         """Перезагружает config.yaml и обновляет состояние приложения"""
@@ -825,9 +1098,9 @@ def main():
     if len(sys.argv) >= 2:
         input_path = sys.argv[1]
         try:
-            df, summary, out_path = analyzer.process_path(input_path)
+            df, summary, out_path, roll_summary = analyzer.process_path(input_path)
             # передаём готовый результат в GUI-класс
-            app = MainWindow(analyzer, initial_result=(df, summary, out_path))
+            app = MainWindow(analyzer, initial_result=(df, summary, out_path, roll_summary))
             app.run()
         except Exception as e:
             # даже в CLI-сценарии покажем нормальное окно об ошибке
