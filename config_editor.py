@@ -4,6 +4,8 @@ import yaml
 from pathlib import Path
 from typing import Dict, Any
 
+from defaults import DEFAULT_CONFIG
+
 font_face = "Calibri"
 
 class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
@@ -60,7 +62,7 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         self.destroy()
 
     def _load_config(self) -> Dict[str, Any]:
-        """Автоматически находит config.yaml"""
+        """Автоматически находит config.yaml и использует глобальный DEFAULT_CONFIG"""
         
         # 1. ПУТИ ПОИСКА (по приоритету)
         possible_paths = [
@@ -83,63 +85,18 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
             print(f"⚠️ config.yaml не найден. Создан: {self.config_path}")
         
         # 4. Загружаем/создаем конфиг
-        default_config = {
-            "tolerance_mm": 5.0,
-            "compress_ranges": True,
-            "formats": {
-                "A0": [841, 1189],
-                "A0×2": [1189, 1682],
-                "A0×3": [1189, 2523],
-                "A0×4": [1189, 3364],
-                "A0×5": [1189, 4205],
-                "A0×6": [1189, 5046],
-                "A0×7": [1189, 5887],
-                "A0×8": [1189, 6728],
-                "A0×9": [1189, 7569],
-                "A1": [594, 841],
-                "A1×3": [841, 1783],
-                "A1×4": [841, 2378],
-                "A1×5": [841, 2973],
-                "A1×6": [841, 3568],
-                "A1×7": [841, 4162],
-                "A1×8": [841, 4758],
-                "A1×9": [841, 5353],
-                "A2": [420, 594],
-                "A2×3": [594, 1261],
-                "A2×4": [594, 1682],
-                "A2×5": [594, 2102],
-                "A2×6": [594, 2523],
-                "A2×7": [594, 2943],
-                "A2×8": [594, 3364],
-                "A2×9": [594, 3784],                
-                "A3": [297, 420],
-                "A3×3": [420, 891],
-                "A3×4": [420, 1189],
-                "A3×5": [420, 1486],
-                "A3×6": [420, 1783],
-                "A3×7": [420, 2080],
-                "A3×8": [420, 2378],
-                "A3×9": [420, 2676],                
-                "A4": [210, 297],
-                "A4×3": [297, 630],
-                "A4×4": [297, 841],
-                "A4×5": [297, 1051],
-                "A4×6": [297, 1261],
-                "A4×7": [297, 1471],
-                "A4×8": [297, 1682],
-                "A4×9": [297, 1892],
-                "A5": [148, 210]
-            }
-        }
-        
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f) or {}
-        except Exception:
+        except yaml.YAMLError as e:
+            print(f"❌ Синтаксическая ошибка в config.yaml: {e}")
+            self.config = {}
+        except Exception as e:
+            print(f"⚠️ Ошибка при чтении config.yaml: {e}")
             self.config = {}
         
-        # 5. Дополняем дефолтными значениями
-        self.config = {**default_config, **self.config}
+        # 5. Дополняем дефолтными значениями (используем глобальный DEFAULT_CONFIG)
+        self.config = {**DEFAULT_CONFIG, **self.config}
         
         print(f"✅ Загружен: {self.config_path}")
         print(f"📐 tolerance_mm: {self.config['tolerance_mm']}")
@@ -307,13 +264,18 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         """Заполняет список форматов"""
         self.formats_listbox.delete(0, tk.END)
         for name, (w, h) in self.config["formats"].items():
-            self.formats_listbox.insert(tk.END, f"{name}: {w}×{h} мм")
+            self.formats_listbox.insert(tk.END, f"{name}: {w}x{h} мм")
 
     def add_format(self):
         """Добавляет новый формат"""
         name = self.format_name_var.get().strip()
-        width = self.format_width_var.get()
-        height = self.format_height_var.get()
+        
+        try:
+            width = self.format_width_var.get()
+            height = self.format_height_var.get()
+        except tk.TclError:
+            messagebox.showerror("Ошибка", "Ширина и высота должны быть числами!")
+            return
 
         if not name or width <= 0 or height <= 0:
             messagebox.showerror("Ошибка", "Введите корректное название и размеры!")
@@ -326,6 +288,8 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         self.config["formats"][name] = [int(width), int(height)]
         self._populate_formats()
         self.format_name_var.set("")
+        self.format_width_var.set(0.0)
+        self.format_height_var.set(0.0)
         self.changes_made()
         messagebox.showinfo("Успех", f"Добавлен формат: {name}")
 
@@ -352,8 +316,13 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
     def edit_format(self):
         """Изменяет выбранный формат"""
         name = self.format_name_var.get().strip()
-        width = self.format_width_var.get()
-        height = self.format_height_var.get()
+        
+        try:
+            width = self.format_width_var.get()
+            height = self.format_height_var.get()
+        except tk.TclError:
+            messagebox.showerror("Ошибка", "Ширина и высота должны быть числами!")
+            return
 
         if not name or width <= 0 or height <= 0:
             messagebox.showerror("Ошибка", "Введите корректное название и размеры!")
@@ -370,6 +339,8 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         self.config["formats"][name] = [int(width), int(height)]
         self._populate_formats()
         self.format_name_var.set("")
+        self.format_width_var.set(0.0)
+        self.format_height_var.set(0.0)
         self.changes_made()
         messagebox.showinfo("Успех", f"Обновлён формат: {name}")
 
