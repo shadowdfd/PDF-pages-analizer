@@ -3,6 +3,7 @@ import sys
 from typing import Dict, Any
 import subprocess
 import platform
+import time
 import fitz  # PyMuPDF
 import pandas as pd
 import yaml
@@ -12,89 +13,95 @@ from pathlib import Path
 #import threading
 import webbrowser
 
+from defaults import DEFAULT_CONFIG
+
 pt_to_mm = 0.3528
 font_face = "Calibri"
 version = "v.1.4.0"
 config_path="config.yaml"
-use_sheet_rotation=False
+# use_sheet_rotation=False
 
 class PDFAnalyzer:
     
     def __init__(self, config_path="config.yaml"):
-        
-        # Загружаем конфиг
-        self.config = self.load_config(config_path)
-        
-        # Проверка на None - используем defaults если конфиг пуст
-        if not self.config:
-            default_config = {
-                "tolerance_mm": 5.0,
-                "compress_ranges": True,
-                "formats": {}
-            }
-            self.config = default_config
+        # Инициализация пустых структур
+        self.config = {}
+        self.tolerance = DEFAULT_CONFIG["tolerance_mm"]
+        self.compress_ranges_y = DEFAULT_CONFIG["compress_ranges"]
+        self.formats = {k: tuple(v) for k, v in DEFAULT_CONFIG["formats"].items()}
 
-        # Получаем настройки
-        self.tolerance = self.config.get("tolerance_mm", 5.0)
-        self.compress_ranges_y = self.config.get("compress_ranges", True)
-        self.formats = {k: tuple(v) for k, v in self.config.get("formats", {}).items()}
-
-        #Обнуляем статистику
+        # Обнуляем статистику
         self.stats = {
             "files_processed": 0,
             "pages_processed": 0,
             "errors": [],
-            "files_skipped": 0
+            "files_skipped": 0,
+            "start_time": None,
+            "end_time": None
         }
+        self._custom_counter = {}
+        
+        # Загружаем и применяем конфиг
+        loaded_config = self.load_config(config_path)
+        self.apply_config(loaded_config)
+
+    def reset_stats(self):
+        """Сбрасывает статистику перед новым анализом."""
+        self.stats = {
+            "files_processed": 0,
+            "pages_processed": 0,
+            "errors": [],
+            "files_skipped": 0,
+            "start_time": None,
+            "end_time": None
+        }
+        self._custom_counter = {}
+
+    def apply_config(self, config):
+        """Применяет конфиг к рабочим полям анализатора."""
+        merged_config = {**DEFAULT_CONFIG, **(config or {})}
+        self.config = merged_config
+        self.tolerance = merged_config.get("tolerance_mm", DEFAULT_CONFIG["tolerance_mm"])
+        self.compress_ranges_y = merged_config.get("compress_ranges", DEFAULT_CONFIG["compress_ranges"])
+        self.formats = {k: tuple(v) for k, v in merged_config.get("formats", {}).items()}
+
+    def resolve_config_path(self, config_path="config.yaml"):
+        """Возвращает путь к config.yaml с учётом dev/EXE-окружения."""
+        possible_paths = [
+            Path(config_path),
+            Path(__file__).parent / config_path,
+            Path.cwd() / config_path,
+        ]
+
+        for path in possible_paths:
+            if path.exists():
+                return path
+
+        return Path(config_path)
 
     def load_config(self, config_path):
-        """Загружает конфигурацию из YAML"""
-        
-        # Конфиг по умолчанию
-        default_config = {
-            "tolerance_mm": 5.0,
-            "compress_ranges": True,
-            "formats": {
-                "A0": [841, 1189],
-                "A0×2": [1189, 1682],
-                "A0×3": [1189, 2523],
-                "A1": [594, 841],
-                "A1×3": [841, 1783],
-                "A1×4": [841, 2378],
-                "A2": [420, 594],
-                "A2×3": [594, 1261],
-                "A2×4": [594, 1682],
-                "A2×5": [594, 2102],
-                "A3": [297, 420],
-                "A3×3": [420, 891],
-                "A3×4": [420, 1189],
-                "A3×5": [420, 1486],
-                "A3×6": [420, 1783],
-                "A3×7": [420, 2080],
-                "A4": [210, 297],
-                "A4×3": [297, 630],
-                "A4×4": [297, 841],
-                "A4×5": [297, 1051],
-                "A4×6": [297, 1261],
-                "A4×7": [297, 1471],
-                "A4×8": [297, 1682],
-                "A4×9": [297, 1892],
-                "A5": [148, 210]
-            }
-        }
+        """Загружает конфигурацию из YAML, возвращает только загруженные значения.
+        Слияние с DEFAULT_CONFIG происходит в apply_config()"""
         
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(self.resolve_config_path(config_path), 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-            return {**default_config, **config}
+                if config is None:
+                    print(f"⚠️ Пустой или невалидный config.yaml, использую дефолт")
+                    return {}
+                return config
         except FileNotFoundError:
-            # print(f"config.yaml не найден, используются значения по умолчанию")
-            messagebox.showerror("Файл конфигурации", "Файл конфигурации config.yaml не найден. Будет создан файл конфигурации с настройками по умолчанию")
-            return default_config
+            print(f"⚠️ config.yaml не найден: {self.resolve_config_path(config_path)}")
+            messagebox.showerror("Файл конфигурации", "Файл конфигурации config.yaml не найден. Будут использоваться значения по умолчанию")
+            return {}
+        except yaml.YAMLError as e:
+            print(f"❌ Синтаксическая ошибка в config.yaml: {e}")
+            messagebox.showerror("Ошибка конфигурации", f"Синтаксическая ошибка в config.yaml:\n{str(e)}\n\nИспользуются значения по умолчанию.")
+            return {}
         except Exception as e:
-            print(f"Ошибка при попытке чтения config.yaml: {e}")
-            messagebox.showerror("Файл конфигурации", "Ошибка при попытке чтения config.yaml: "+ str(e) + "\n Используются значения по умолчанию.")
-            return default_config
+            print(f"❌ Ошибка при чтении config.yaml: {e}")
+            messagebox.showerror("Файл конфигурации", f"Ошибка при попытке чтения config.yaml:\n{str(e)}\n\nИспользуются значения по умолчанию.")
+            return {}
 
     def get_standard_format(self, w_mm: float, h_mm: float) -> tuple[str, str]:
         """Определяет формат из настроек либо создаёт новый Custom1, Custom2... для нестандартных размеров"""
@@ -123,20 +130,24 @@ class PDFAnalyzer:
         """Определяет цветность страницы"""
         try:
             for img in page.get_images(full=True):
-                pix = fitz.Pixmap(page.parent, img[0])
+                pix = None
                 try:
+                    pix = fitz.Pixmap(page.parent, img[0])
                     if pix.colorspace and pix.colorspace.n > 1:
                         return "Цветная"
                 finally:
-                    pix = None
+                    # Правильное освобождение ресурсов Pixmap
+                    if pix is not None:
+                        del pix
             for draw in page.get_drawings():
                 for col in (draw.get("fill"), draw.get("stroke")):
                     if col and len(col) >= 3:
                         r, g, b = col[:3]
                         if not (abs(r - g) < 1e-3 and abs(g - b) < 1e-3):
                             return "Цветная"
-        except Exception:
-            # Ошибка при анализе цвета - считаем ч/б
+        except Exception as e:
+            # Ошибка при анализе цвета - считаем ч/б и логируем
+            print(f"⚠️ Ошибка анализа цвета страницы: {e}")
             pass
         return "Ч/Б"
 
@@ -219,7 +230,7 @@ class PDFAnalyzer:
         """
         # Исключаем только A4 и A3
         if std_format in ("A4", "A3"):
-            return "Нестандартный"
+            return "Отдельный лист"
         
         # Определяем меньшую сторону
         min_side = min(w_mm, h_mm)
@@ -236,7 +247,7 @@ class PDFAnalyzer:
         elif abs(min_side - 841) <= tolerance:
             return "841мм"
         else:
-            return "Отдельный лист"
+            return "Нестандартный"
 
     def build_roll_summary(self, df: pd.DataFrame) -> pd.DataFrame:
         """Строит сводку по форматам рулонов."""
@@ -253,7 +264,7 @@ class PDFAnalyzer:
         )
         
         # Исключаем "Нестандартный" из сводки
-        df_filtered = df_filtered[~df_filtered["Формат рулона"].isin(["Отдельный лист"])]
+        df_filtered = df_filtered[~df_filtered["Формат рулона"].isin(["Отдельный лист", "Нестандартный"])]
         
         if df_filtered.empty:
             return pd.DataFrame()
@@ -303,16 +314,16 @@ class PDFAnalyzer:
                 rect = page.rect
                 w_pt, h_pt = rect.width, rect.height
 
-                if use_sheet_rotation and rotation in (90, 270):
-                    width_mm = round(h_pt * pt_to_mm, 1)
-                    height_mm = round(w_pt * pt_to_mm, 1)
-                else:
-                    if w_pt < h_pt:
-                        temp1 = w_pt
-                        w_pt = h_pt
-                        h_pt = temp1
-                    width_mm = round(w_pt * pt_to_mm, 1)
-                    height_mm = round(h_pt * pt_to_mm, 1)
+                # if use_sheet_rotation and rotation in (90, 270):
+                #     width_mm = round(h_pt * pt_to_mm, 1)
+                #     height_mm = round(w_pt * pt_to_mm, 1)
+                # else:
+                if w_pt < h_pt:
+                    temp1 = w_pt
+                    w_pt = h_pt
+                    h_pt = temp1
+                width_mm = round(w_pt * pt_to_mm, 1)
+                height_mm = round(h_pt * pt_to_mm, 1)
 
                 std_format, std_size = self.get_standard_format(width_mm, height_mm)
                 color_type = self.analyze_page_color(page)
@@ -333,15 +344,87 @@ class PDFAnalyzer:
             self.stats["errors"].append(f"{pdf_path}: {str(e)}")
             print(f"Ошибка в {pdf_path}: {e}")
 
-    def process_path(self, path: str) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
+    def save_excel_safe(self, out_path: Path, df: pd.DataFrame, summary: pd.DataFrame, roll_summary: pd.DataFrame) -> str:
+        """Безопасное сохранение Excel с обработкой ошибок при занятом файле"""
+        max_attempts = 3
+        attempt = 0
+        current_path = out_path
+        
+        while attempt < max_attempts:
+            try:
+                with pd.ExcelWriter(current_path, engine="openpyxl") as writer:
+                    df.to_excel(writer, index=False, sheet_name="Все страницы")
+                    summary.to_excel(writer, index=False, sheet_name="Сводка ЕСКД")
+                    if not roll_summary.empty:
+                        roll_summary.to_excel(writer, index=False, sheet_name="Сводка по рулонам")
+                    
+                    # Автоподбор ширины столбцов для всех листов
+                    for sheet_name in writer.sheets:
+                        worksheet = writer.sheets[sheet_name]
+                        for column in worksheet.columns:
+                            max_length = 0
+                            column_letter = column[0].column_letter
+                            for cell in column:
+                                try:
+                                    if cell.value:
+                                        cell_length = len(str(cell.value))
+                                        max_length = max(max_length, cell_length)
+                                except:
+                                    pass
+                            adjusted_width = min(max_length + 2, 50)
+                            worksheet.column_dimensions[column_letter].width = adjusted_width
+                
+                # Успешно сохранено
+                return str(current_path)
+            
+            except PermissionError:
+                attempt += 1
+                if attempt < max_attempts:
+                    # Предлагаем пользователю вариант
+                    new_path = out_path.parent / f"{out_path.stem}(1).xlsx"
+                    
+                    response = messagebox.askyesno(
+                        "Файл занят",
+                        f"Файл '{out_path.name}' открыт в другой программе.\n\n"
+                        f"Нажмите 'Да', чтобы закрыть файл и повторить сохранение,\n"
+                        f"или 'Нет', чтобы сохранить как '{new_path.name}'"
+                    )
+                    
+                    if response:
+                        # Пользователь закрыл файл, повторяем попытку
+                        continue
+                    else:
+                        # Сохраняем с другим именем
+                        current_path = new_path
+                        continue
+            
+            except Exception as e:
+                messagebox.showerror(
+                    "Ошибка сохранения Excel",
+                    f"Не удалось сохранить файл: {str(e)}"
+                )
+                raise
+        
+        # Если все попытки исчерпаны
+        messagebox.showerror(
+            "Ошибка сохранения",
+            f"Не удалось сохранить файл после {max_attempts} попыток. Пожалуйста, закройте файл вручную."
+        )
+        raise PermissionError(f"Невозможно сохранить {current_path}: файл остаётся занят")
+
+    def process_path(self, path: str, progress_callback=None) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
         """Главная функция обработки"""
         
         all_data = []
-        self.config = self.load_config("config.yaml")  # Загружаем свежий конфиг
+        self.reset_stats()
+        self.stats["start_time"] = time.time()  # Засекаем время начала
+        self.apply_config(self.load_config("config.yaml"))  # Загружаем свежий конфиг
         path_obj = Path(path)
 
         if path_obj.is_file() and path_obj.suffix.lower() == ".pdf":
             self.process_pdf(str(path_obj), all_data)
+            if progress_callback:
+                progress_callback(1, 1, str(path_obj))
             base_name = path_obj.stem
             out_dir = path_obj.parent
 
@@ -351,8 +434,11 @@ class PDFAnalyzer:
             pdf_files = list(path_obj.glob("*.pdf"))
             self.stats["files_skipped"] = len([f for f in path_obj.iterdir() if f.suffix.lower() != ".pdf"])
             
-            for pdf_path in pdf_files:
+            for idx, pdf_path in enumerate(pdf_files, start=1):
                 self.process_pdf(str(pdf_path), all_data)
+                # Обновляем прогресс
+                if progress_callback:
+                    progress_callback(idx, len(pdf_files), str(pdf_path))
 
         else:
             raise ValueError(f"'{path}' не является PDF или папкой")
@@ -394,13 +480,11 @@ class PDFAnalyzer:
 
         out_path = out_dir / f"{base_name}_all_sizes.xlsx"
 
-        with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Все страницы")
-            summary.to_excel(writer, index=False, sheet_name="Сводка ЕСКД")
-            if not roll_summary.empty:
-                roll_summary.to_excel(writer, index=False, sheet_name="Сводка по рулонам")
+        # Безопасное сохранение Excel с обработкой ошибок при занятом файле
+        saved_path = self.save_excel_safe(out_path, df, summary, roll_summary)
 
-        return df, summary, str(out_path), roll_summary
+        self.stats["end_time"] = time.time()  # Засекаем время конца обработки
+        return df, summary, saved_path, roll_summary
 
     def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str, roll_summary: pd.DataFrame = None) -> str:
         """Формирует текстовый отчёт для вывода в GUI/копирования."""
@@ -416,6 +500,15 @@ class PDFAnalyzer:
         lines.append(f"    Файлов обработано: {self.stats.get('files_processed', 0)}")
         lines.append(f"    Листов обработано: {self.stats.get('pages_processed', 0)}")
         lines.append(f"    Файлов пропущено (не PDF): {self.stats.get('files_skipped', 0)}")
+        
+        # Вычисляем время обработки
+        if self.stats.get('start_time') and self.stats.get('end_time'):
+            elapsed_time = self.stats['end_time'] - self.stats['start_time']
+            minutes = int(elapsed_time // 60)
+            seconds = int(elapsed_time % 60)
+            time_str = f"{minutes}м {seconds}с" if minutes > 0 else f"{seconds}с"
+            lines.append(f"    ⏱️ Время обработки: {time_str}")
+        
         #lines.append(f"    Допуск распознавания форматов: {self.tolerance} мм")
         #lines.append(f"    Стандартных форматов в базе: {len(self.formats)}")
         lines.append("")
@@ -688,11 +781,14 @@ class MainWindow:
         status_frame = ttk.Frame(root, padding=10)
         status_frame.pack(fill=tk.X)
         
-        self.status_label = tk.Label(status_frame, text="Готов", font=(font_face, 10), width=15, justify=tk.LEFT)
+        self.status_label = tk.Label(status_frame, text="Готов", font=(font_face, 10), width=50, justify=tk.LEFT)
         self.status_label.pack(side=tk.LEFT, pady=5, anchor="nw")
         
-        self.progress = ttk.Progressbar(status_frame, mode='indeterminate')
+        # Реальный прогресс-бар (determinate)
+        self.progress = ttk.Progressbar(status_frame, mode='determinate', maximum=100)
         self.progress.pack(pady=10, fill='x', side=tk.RIGHT, expand=True)
+        self.progress_value = 0
+        self.progress_max = 0
         
         # Контекстное меню (ПКМ)
         self.context_menu = tk.Menu(self.stats_text, tearoff=0)
@@ -744,23 +840,59 @@ class MainWindow:
 
     def _run_analysis(self, path: str):
         
-        self.progress.start(10)
+        # Инициализируем прогресс-бар
+        self.progress_value = 0
+        self.progress_max = 0
+        self.progress['value'] = 0
+        
+        self.status_label.config(text="Подсчёт файлов...")
+        self.root.update_idletasks()
+        
+        # Подсчитываем количество PDF файлов
+        path_obj = Path(path)
+        if path_obj.is_file() and path_obj.suffix.lower() == ".pdf":
+            self.progress_max = 1
+        elif path_obj.is_dir():
+            pdf_count = len(list(path_obj.glob("*.pdf")))
+            self.progress_max = max(1, pdf_count)
+        
+        # Устанавливаем максимум и начинаем
+        self.progress['maximum'] = max(100, self.progress_max * 20)  # По 20% на файл
+        self.progress_value = 0
+        
         self.status_label.config(text="Обработка PDF...")
         self.root.update_idletasks()
         
         try:
-            df, summary, out_path, roll_summary = self.analyzer.process_path(path)
+            df, summary, out_path, roll_summary = self.analyzer.process_path(
+                path, 
+                progress_callback=self._update_progress
+            )
             self.last_result = (df, summary, out_path, roll_summary)
             report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
-             # 🆕 АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ТЕКСТОВОГО ОТЧЁТА
+            # 🆕 АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ТЕКСТОВОГО ОТЧЁТА
             self._save_report_auto(df, summary, out_path, report_text, roll_summary)           
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
             
-        self.progress.stop()
+        # Завершаем прогресс
+        self.progress['value'] = self.progress['maximum']
         self.status_label.config(text="Готово!")
+        self.root.update_idletasks()
+
+    def _update_progress(self, current: int, total: int, filename: str = ""):
+        """Обновляет прогресс-бар при обработке файлов"""
+        if total > 0:
+            # 80% на обработку файлов, 20% на финальные операции
+            self.progress_value = int((current / total) * 80)
+            self.progress['value'] = self.progress_value
+            
+            if filename:
+                self.status_label.config(text=f"Обработка: {Path(filename).name} ({current}/{total})")
+            
+            self.root.update_idletasks()
 
     def _save_report_auto(self, df, summary, out_path: str, report_text: str, roll_summary=None):
         """Автоматически сохраняет отчёт после анализа"""
@@ -958,7 +1090,7 @@ class MainWindow:
         try:
             # 1. Перезагружаем конфиг
             self.config = self._load_config()
-            self.analyzer.compress_ranges_y = self.config.get('compress_ranges', True)
+            self.analyzer.apply_config(self.config)
             print(f"self.analyzer.compress_ranges_y = {self.analyzer.compress_ranges_y}")
             print(f"✅ Конфиг перезагружен:")
             print(f"   📐 tolerance_mm: {self.config.get('tolerance_mm', 5.0)}")
@@ -969,7 +1101,7 @@ class MainWindow:
             self._update_config_status()
             
             # 3. Если есть результаты анализа - пересчитываем
-            if hasattr(self, 'results_text') and self.results_text.get(1.0, tk.END).strip():
+            if self.last_result:
                 self._update_results_display()
                 
             #messagebox.showinfo("✅ Конфигурация", 
@@ -983,7 +1115,7 @@ class MainWindow:
             messagebox.showerror("Ошибка", f"Не удалось обновить конфиг:\n{str(e)}")
 
     def _load_config(self) -> Dict[str, Any]:
-        """Загружает config.yaml (тот же код что в ConfigEditor)"""
+        """Загружает config.yaml (используется тот же DEFAULT_CONFIG из начала файла)"""
         possible_paths = [
             Path("config.yaml"),
             Path(__file__).parent / "config.yaml",
@@ -999,45 +1131,20 @@ class MainWindow:
         if config_path is None:
             config_path = Path("config.yaml")
         
-        default_config = {
-            "tolerance_mm": 5.0,
-            "compress_ranges": True,
-            "formats": {
-                "A0": [841, 1189],
-                "A0×2": [1189, 1682],
-                "A0×3": [1189, 2523],
-                "A1": [594, 841],
-                "A1×3": [841, 1783],
-                "A1×4": [841, 2378],
-                "A2": [420, 594],
-                "A2×3": [594, 1261],
-                "A2×4": [594, 1682],
-                "A2×5": [594, 2102],
-                "A3": [297, 420],
-                "A3×3": [420, 891],
-                "A3×4": [420, 1189],
-                "A3×5": [420, 1486],
-                "A3×6": [420, 1783],
-                "A3×7": [420, 2080],
-                "A4": [210, 297],
-                "A4×3": [297, 630],
-                "A4×4": [297, 841],
-                "A4×5": [297, 1051],
-                "A4×6": [297, 1261],
-                "A4×7": [297, 1471],
-                "A4×8": [297, 1682],
-                "A4×9": [297, 1892],
-                "A5": [148, 210]
-            }
-        }
-        
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f) or {}
-        except Exception:
+                config = yaml.safe_load(f)
+                if config is None:
+                    print(f"⚠️ Пустой или невалидный config.yaml, использую дефолт")
+                    config = {}
+        except yaml.YAMLError as e:
+            print(f"❌ Синтаксическая ошибка в config.yaml: {e}")
+            config = {}
+        except Exception as e:
+            print(f"⚠️ Не могу прочитать config.yaml: {e}")
             config = {}
         
-        return {**default_config, **config}
+        return {**DEFAULT_CONFIG, **config}
 
     def _update_config_status(self):
         """Обновляет индикаторы конфигурации в интерфейсе"""
@@ -1075,17 +1182,15 @@ class MainWindow:
 
     def _update_results_display(self):
         """Пересчитывает отображение результатов с новым compress_ranges"""
-        if not hasattr(self, 'analyzer') or not self.analyzer:
+        if not self.last_result:
             return
             
         # Пересчитываем с новыми настройками
-        self.analyzer.config = self.config
-        formats_data = self.analyzer.analyze_all()
+        df, summary, out_path, roll_summary = self.last_result
+        report = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
         
         # Обновляем Text виджет
-        self.results_text.delete(1.0, tk.END)
-        report = self.analyzer.build_report_text(formats_data)
-        self.results_text.insert(1.0, report)
+        self._set_stats_text(report)
 
     # ---------- запуск ----------
 
