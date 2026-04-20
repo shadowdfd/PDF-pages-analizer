@@ -1,3 +1,5 @@
+import os
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox
 import yaml
@@ -18,12 +20,21 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
             self._own_root = tk.Tk()
             self._own_root.withdraw()
             parent = self._own_root
+            # Загружаем иконку с fallback
+            try:
+                icon_path = self.resource_path("img/icon_conf.png")
+                icon = tk.PhotoImage(file=icon_path)
+                self._own_root.iconphoto(True, icon)
+            except Exception:
+                # Если иконка не найдена, продолжаем без неё
+                pass
         print(f"ConfigEditor: own_root={self._own_root}")
         print(f"ConfigEditor: parent={parent}")
         self._is_main = (self._own_root is not None)
         print(f"ConfigEditor: is_main={self._is_main}")
         super().__init__(parent)
         
+
         self.title("Редактор конфигурации")
         self.geometry("500x500")
         self.resizable(True, True)
@@ -103,6 +114,16 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         print(f"📦 compress_ranges: {self.config['compress_ranges']}")
         
         return self.config
+
+    def resource_path(self, relative_path):
+        """Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller"""
+        try:
+            # PyInstaller создаёт временную папку _MEIPASS
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        
+        return os.path.join(base_path, relative_path)
 
     def _build_ui(self):
 

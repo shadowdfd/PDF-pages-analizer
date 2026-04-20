@@ -662,7 +662,7 @@ class MainWindow:
         
         # Загружаем иконку с fallback
         try:
-            icon_path = self.resource_path("icon.png")
+            icon_path = self.resource_path("img/icon.png")
             icon = tk.PhotoImage(file=icon_path)
             self.root.iconphoto(True, icon)
         except Exception:
@@ -960,7 +960,7 @@ class MainWindow:
         try:
             from PIL import Image, ImageTk
             
-            logo_path = self.resource_path("logo.png")
+            logo_path = self.resource_path("img/logo.png")
             img = Image.open(logo_path)
             logo_img = ImageTk.PhotoImage(img)
             
