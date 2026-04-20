@@ -33,9 +33,9 @@ VSVersionInfo(
         StringStruct('ProductVersion', '1.4.1'),
         StringStruct('LegalCopyright', 'Copyright © 2026 Vadim Rodionov'),
         StringStruct('LegalTrademarks', ''),
-        StringStruct('FileDescription', 'PDFPageSelect'),
+        StringStruct('FileDescription', 'Определение носителей для печати'),
         StringStruct('InternalName', 'pdfpages_pro'),
-        StringStruct('OriginalFilename', 'PDF pages analizer'),
+        StringStruct('OriginalFilename', 'pdfpages_pro.exe'),
         StringStruct('ProductName', 'PDF pages analizer')])
       ]), 
     VarFileInfo([VarStruct('Translation', [65535, 1200])])
