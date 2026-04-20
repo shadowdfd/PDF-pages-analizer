@@ -17,7 +17,7 @@ from defaults import DEFAULT_CONFIG
 
 pt_to_mm = 0.3528
 font_face = "Calibri"
-version = "v.1.4.0"
+version = "v.1.4.1"
 config_path="config.yaml"
 # use_sheet_rotation=False
 
