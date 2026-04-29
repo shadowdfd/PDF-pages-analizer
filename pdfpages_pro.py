@@ -12,13 +12,14 @@ from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 #import threading
 import webbrowser
+import setting
 
-from defaults import DEFAULT_CONFIG
+from defaults import DEFAULT_CONFIG, DEFAULT_SETTINGS, DEFAULT_FORMATS
 
-pt_to_mm = 0.3528
-font_face = "Calibri"
-version = "v.1.4.1"
-config_path="config.yaml"
+pt_to_mm = setting.pt_to_mm
+font_face = setting.font_face
+version = setting.version
+config_path=setting.config_path
 # use_sheet_rotation=False
 
 class PDFAnalyzer:
@@ -26,9 +27,9 @@ class PDFAnalyzer:
     def __init__(self, config_path="config.yaml"):
         # Инициализация пустых структур
         self.config = {}
-        self.tolerance = DEFAULT_CONFIG["tolerance_mm"]
-        self.compress_ranges_y = DEFAULT_CONFIG["compress_ranges"]
-        self.formats = {k: tuple(v) for k, v in DEFAULT_CONFIG["formats"].items()}
+        self.tolerance = DEFAULT_SETTINGS["tolerance_mm"]
+        self.compress_ranges_y = DEFAULT_SETTINGS["compress_ranges"]
+        self.formats = {}  # Будут загружены из конфига в apply_config()
 
         # Обнуляем статистику
         self.stats = {
@@ -58,12 +59,17 @@ class PDFAnalyzer:
         self._custom_counter = {}
 
     def apply_config(self, config):
-        """Применяет конфиг к рабочим полям анализатора."""
-        merged_config = {**DEFAULT_CONFIG, **(config or {})}
+        """Применяет конфиг к рабочим полям анализатора.
+        Дефолтные НАСТРОЙКИ используются только если отсутствуют в config.
+        Форматы берутся только из config (дефолтные не подставляются автоматом)."""
+        # Слияние: дефолтные настройки + загруженные настройки
+        merged_config = {**DEFAULT_SETTINGS, **(config or {})}
         self.config = merged_config
-        self.tolerance = merged_config.get("tolerance_mm", DEFAULT_CONFIG["tolerance_mm"])
-        self.compress_ranges_y = merged_config.get("compress_ranges", DEFAULT_CONFIG["compress_ranges"])
-        self.formats = {k: tuple(v) for k, v in merged_config.get("formats", {}).items()}
+        self.tolerance = merged_config.get("tolerance_mm", DEFAULT_SETTINGS["tolerance_mm"])
+        self.compress_ranges_y = merged_config.get("compress_ranges", DEFAULT_SETTINGS["compress_ranges"])
+        # Форматы - только из config, без дефолтов
+        self.formats = {k: tuple(v) for k, v in (config or {}).get("formats", {}).items()}
+        self.config["formats"] = self.formats
 
     def resolve_config_path(self, config_path="config.yaml"):
         """Возвращает путь к config.yaml с учётом dev/EXE-окружения."""
@@ -81,7 +87,8 @@ class PDFAnalyzer:
 
     def load_config(self, config_path):
         """Загружает конфигурацию из YAML, возвращает только загруженные значения.
-        Слияние с DEFAULT_CONFIG происходит в apply_config()"""
+        Слияние с DEFAULT_SETTINGS происходит в apply_config().
+        Форматы используются только если присутствуют в config."""
         
         try:
             with open(self.resolve_config_path(config_path), 'r', encoding='utf-8') as f:
@@ -434,6 +441,7 @@ class PDFAnalyzer:
             pdf_files = list(path_obj.glob("*.pdf"))
             self.stats["files_skipped"] = len([f for f in path_obj.iterdir() if f.suffix.lower() != ".pdf"])
             
+            # Обрабатываем каждый PDF файл в папке с обновлением прогресса
             for idx, pdf_path in enumerate(pdf_files, start=1):
                 self.process_pdf(str(pdf_path), all_data)
                 # Обновляем прогресс
@@ -741,10 +749,7 @@ class MainWindow:
                                             font=(font_face, 10))
         self.formats_count_status_label.pack(anchor=tk.W)
 
-        # 2. Обновляем статус в интерфейсе
-        self.refresh_config()
-         
-        # Центральная область — текст отчёта
+        # Центральная область — текст отчёта (должна быть инициализирована ДО refresh_config)
         center_frame = ttk.LabelFrame(root, text="Отчёт", padding=10)
         center_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
@@ -760,6 +765,10 @@ class MainWindow:
             padx=10,
             pady=10,
         )
+        
+        # Обновляем статус в интерфейсе (после инициализации stats_text)
+        self.refresh_config()
+        
         scroll = ttk.Scrollbar(center_frame, orient=tk.VERTICAL, command=self.stats_text.yview)
         self.stats_text.configure(yscrollcommand=scroll.set)
 
@@ -1115,7 +1124,9 @@ class MainWindow:
             messagebox.showerror("Ошибка", f"Не удалось обновить конфиг:\n{str(e)}")
 
     def _load_config(self) -> Dict[str, Any]:
-        """Загружает config.yaml (используется тот же DEFAULT_CONFIG из начала файла)"""
+        """Загружает config.yaml.
+        Возвращает только то, что загружено из файла.
+        Дефолтные НАСТРОЙКИ применяются в apply_config при необходимости."""
         possible_paths = [
             Path("config.yaml"),
             Path(__file__).parent / "config.yaml",
@@ -1135,16 +1146,19 @@ class MainWindow:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
                 if config is None:
-                    print(f"⚠️ Пустой или невалидный config.yaml, использую дефолт")
+                    print(f"⚠️ Пустой или невалидный config.yaml, использую дефолтные настройки")
                     config = {}
         except yaml.YAMLError as e:
             print(f"❌ Синтаксическая ошибка в config.yaml: {e}")
+            print(f"ℹ️ Используются дефолтные настройки")
             config = {}
         except Exception as e:
             print(f"⚠️ Не могу прочитать config.yaml: {e}")
+            print(f"ℹ️ Используются дефолтные настройки")
             config = {}
         
-        return {**DEFAULT_CONFIG, **config}
+        # Возвращаем только то, что загружено из файла (без автоматических дефолтов)
+        return config
 
     def _update_config_status(self):
         """Обновляет индикаторы конфигурации в интерфейсе"""
@@ -1183,6 +1197,10 @@ class MainWindow:
     def _update_results_display(self):
         """Пересчитывает отображение результатов с новым compress_ranges"""
         if not self.last_result:
+            return
+        
+        # Проверяем, инициализирован ли stats_text (на случай вызова до _build_ui)
+        if not hasattr(self, 'stats_text'):
             return
             
         # Пересчитываем с новыми настройками
