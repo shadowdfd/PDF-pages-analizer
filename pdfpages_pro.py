@@ -13,6 +13,11 @@ from pathlib import Path
 #import threading
 import webbrowser
 import setting
+import matplotlib
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 from defaults import DEFAULT_CONFIG, DEFAULT_SETTINGS, DEFAULT_FORMATS
 
@@ -89,18 +94,42 @@ class PDFAnalyzer:
         """Загружает конфигурацию из YAML, возвращает только загруженные значения.
         Слияние с DEFAULT_SETTINGS происходит в apply_config().
         Форматы используются только если присутствуют в config."""
-        
+
+        resolved_path = self.resolve_config_path(config_path)
+
         try:
-            with open(self.resolve_config_path(config_path), 'r', encoding='utf-8') as f:
+            with open(resolved_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
                 if config is None:
                     print(f"⚠️ Пустой или невалидный config.yaml, использую дефолт")
-                    return {}
+                    return
                 return config
         except FileNotFoundError:
-            print(f"⚠️ config.yaml не найден: {self.resolve_config_path(config_path)}")
-            messagebox.showerror("Файл конфигурации", "Файл конфигурации config.yaml не найден. Будут использоваться значения по умолчанию")
-            return {}
+            # Файл не найден - создаем его с дефолтными значениями
+            print(f"⚠️ config.yaml не найден: {resolved_path}")
+            print(f"✅ Создаю новый config.yaml с дефолтными значениями...")
+
+            try:
+                # Создаем конфиг с дефолтными значениями
+                with open(resolved_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(DEFAULT_CONFIG, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+                messagebox.showinfo(
+                    "Файл конфигурации создан",
+                    f"Файл конфигурации config.yaml не найден.\n\n"
+                    f"Создан новый файл с настройками по умолчанию:\n{resolved_path}"
+                )
+                print(f"✅ config.yaml успешно создан: {resolved_path}")
+                return DEFAULT_CONFIG
+
+            except Exception as create_error:
+                print(f"❌ Ошибка при создании config.yaml: {create_error}")
+                messagebox.showerror(
+                    "Ошибка создания конфигурации",
+                    f"Не удалось создать config.yaml:\n{str(create_error)}\n\nИспользуются значения по умолчанию."
+                )
+                return {}
+
         except yaml.YAMLError as e:
             print(f"❌ Синтаксическая ошибка в config.yaml: {e}")
             messagebox.showerror("Ошибка конфигурации", f"Синтаксическая ошибка в config.yaml:\n{str(e)}\n\nИспользуются значения по умолчанию.")
@@ -258,7 +287,7 @@ class PDFAnalyzer:
 
     def build_roll_summary(self, df: pd.DataFrame) -> pd.DataFrame:
         """Строит сводку по форматам рулонов."""
-        
+
         # Добавляем классификацию по рулону (передаём размеры и формат)
         df_filtered = df.copy()
         df_filtered["Формат рулона"] = df_filtered.apply(
@@ -269,43 +298,57 @@ class PDFAnalyzer:
             ),
             axis=1
         )
-        
+
         # Исключаем "Нестандартный" из сводки
         df_filtered = df_filtered[~df_filtered["Формат рулона"].isin(["Отдельный лист", "Нестандартный"])]
-        
+
         if df_filtered.empty:
             return pd.DataFrame()
-        
+
         # Группировка: Файл + Формат рулона + Стандартный формат
         def get_page_list(group: pd.DataFrame, color: str) -> str:
             pages = sorted(group[group["Цветность"] == color]["Страница"].tolist())
             return ", ".join(map(str, pages)) if pages else "-"
-        
+
         roll_summary_data = []
-        for (roll_format, std_format, file_name), group in df_filtered.groupby(
-            ["Формат рулона", "Стандартный формат", "Файл"]
-        ):
-            pages_list_bw = get_page_list(group, "Ч/Б")
-            pages_list_col = get_page_list(group, "Цветная")
-            
-            # НЕ сжимаем здесь - будем сжимать только в текстовом отчёте
-            # Храним оригинальные диапазоны страниц
-            
+
+        # Группировка по файлу и формату рулона для добавления итоговых строк
+        for (file_name, roll_format), file_roll_group in df_filtered.groupby(["Файл", "Формат рулона"]):
+
+            # Добавляем итоговую строку по рулону
+            all_pages_bw = sorted(file_roll_group[file_roll_group["Цветность"] == "Ч/Б"]["Страница"].tolist())
+            all_pages_col = sorted(file_roll_group[file_roll_group["Цветность"] == "Цветная"]["Страница"].tolist())
+
             roll_summary_data.append({
                 "Файл": file_name,
-                "Формат рулона": roll_format,
-                "Стандартный формат": std_format,
-                "Размер стандарта": group["Размер стандарта"].iloc[0],
-                "Количество": len(group),
-                "Ч/Б страницы": pages_list_bw,
-                "Цветные страницы": pages_list_col,
-                "Цветных": (group["Цветность"] == "Цветная").sum(),
-                "Ч/Б": (group["Цветность"] == "Ч/Б").sum(),
+                "Формат рулона": f"🧻 Рулон {roll_format}",
+                "Стандартный формат": "ИТОГО",
+                "Размер стандарта": "-",
+                "Количество": len(file_roll_group),
+                "Ч/Б страницы": ", ".join(map(str, all_pages_bw)) if all_pages_bw else "-",
+                "Цветные страницы": ", ".join(map(str, all_pages_col)) if all_pages_col else "-",
+                "Цветных": (file_roll_group["Цветность"] == "Цветная").sum(),
+                "Ч/Б": (file_roll_group["Цветность"] == "Ч/Б").sum(),
             })
-        
-        return pd.DataFrame(roll_summary_data).sort_values(
-            ["Файл", "Формат рулона", "Стандартный формат"]
-        ).reset_index(drop=True)
+
+            # Добавляем детальные строки по каждому формату внутри рулона
+            for std_format, group in file_roll_group.groupby("Стандартный формат"):
+                pages_list_bw = get_page_list(group, "Ч/Б")
+                pages_list_col = get_page_list(group, "Цветная")
+
+                roll_summary_data.append({
+                    "Файл": file_name,
+                    "Формат рулона": roll_format,
+                    "Стандартный формат": std_format,
+                    "Размер стандарта": group["Размер стандарта"].iloc[0],
+                    "Количество": len(group),
+                    "Ч/Б страницы": pages_list_bw,
+                    "Цветные страницы": pages_list_col,
+                    "Цветных": (group["Цветность"] == "Цветная").sum(),
+                    "Ч/Б": (group["Цветность"] == "Ч/Б").sum(),
+                })
+
+        return pd.DataFrame(roll_summary_data).reset_index(drop=True)
 
     def process_pdf(self, pdf_path: str, all_data: list) -> None:
         """Обрабатывает один PDF файл"""
@@ -356,7 +399,7 @@ class PDFAnalyzer:
         max_attempts = 3
         attempt = 0
         current_path = out_path
-        
+
         while attempt < max_attempts:
             try:
                 with pd.ExcelWriter(current_path, engine="openpyxl") as writer:
@@ -364,7 +407,7 @@ class PDFAnalyzer:
                     summary.to_excel(writer, index=False, sheet_name="Сводка ЕСКД")
                     if not roll_summary.empty:
                         roll_summary.to_excel(writer, index=False, sheet_name="Сводка по рулонам")
-                    
+
                     # Автоподбор ширины столбцов для всех листов
                     for sheet_name in writer.sheets:
                         worksheet = writer.sheets[sheet_name]
@@ -380,31 +423,79 @@ class PDFAnalyzer:
                                     pass
                             adjusted_width = min(max_length + 2, 50)
                             worksheet.column_dimensions[column_letter].width = adjusted_width
-                
+
                 # Успешно сохранено
                 return str(current_path)
-            
+
             except PermissionError:
                 attempt += 1
                 if attempt < max_attempts:
-                    # Предлагаем пользователю вариант
-                    new_path = out_path.parent / f"{out_path.stem}(1).xlsx"
-                    
-                    response = messagebox.askyesno(
-                        "Файл занят",
-                        f"Файл '{out_path.name}' открыт в другой программе.\n\n"
-                        f"Нажмите 'Да', чтобы закрыть файл и повторить сохранение,\n"
-                        f"или 'Нет', чтобы сохранить как '{new_path.name}'"
+                    # Ищем свободное имя файла с автоинкрементом (1), (2), (3)...
+                    counter = 1
+                    new_path = out_path.parent / f"{out_path.stem}({counter}).xlsx"
+                    while new_path.exists():
+                        counter += 1
+                        new_path = out_path.parent / f"{out_path.stem}({counter}).xlsx"
+
+                    # Создаем кастомное окно с понятными кнопками
+                    dialog = tk.Toplevel()
+                    dialog.title("Файл занят")
+                    dialog.geometry("400x150")
+                    dialog.resizable(False, False)
+                    dialog.grab_set()
+
+                    # Центрируем окно
+                    dialog.update_idletasks()
+                    x = (dialog.winfo_screenwidth() // 2) - (400 // 2)
+                    y = (dialog.winfo_screenheight() // 2) - (150 // 2)
+                    dialog.geometry(f"+{x}+{y}")
+
+                    # Текст сообщения
+                    message = tk.Label(
+                        dialog,
+                        text=f"Файл '{out_path.name}' открыт в другой программе.\n\n"
+                             f"Закройте файл и нажмите 'Повторить'\n"
+                             f"или сохраните как '{new_path.name}'",
+                        justify="left",
+                        padx=20,
+                        pady=20
                     )
-                    
-                    if response:
-                        # Пользователь закрыл файл, повторяем попытку
+                    message.pack()
+
+                    # Переменная для хранения выбора
+                    user_choice = tk.StringVar(value="")
+
+                    # Кнопки
+                    button_frame = tk.Frame(dialog)
+                    button_frame.pack(pady=10)
+
+                    retry_btn = tk.Button(
+                        button_frame,
+                        text="🔄 Повторить",
+                        width=15,
+                        command=lambda: [user_choice.set("retry"), dialog.destroy()]
+                    )
+                    retry_btn.pack(side="left", padx=5)
+
+                    rename_btn = tk.Button(
+                        button_frame,
+                        text="💾 Переименовать",
+                        width=15,
+                        command=lambda: [user_choice.set("rename"), dialog.destroy()]
+                    )
+                    rename_btn.pack(side="left", padx=5)
+
+                    # Ждем выбора пользователя
+                    dialog.wait_window()
+
+                    if user_choice.get() == "retry":
+                        # Повторяем попытку с тем же именем
                         continue
                     else:
-                        # Сохраняем с другим именем
+                        # Сохраняем с новым именем
                         current_path = new_path
                         continue
-            
+
             except Exception as e:
                 messagebox.showerror(
                     "Ошибка сохранения Excel",
@@ -493,6 +584,67 @@ class PDFAnalyzer:
 
         self.stats["end_time"] = time.time()  # Засекаем время конца обработки
         return df, summary, saved_path, roll_summary
+
+    def calculate_roll_metrics(self, df: pd.DataFrame, roll_summary: pd.DataFrame) -> Dict[str, Any]:
+        """Рассчитывает метрики загрузки рулонов: площадь и длину."""
+
+        if roll_summary is None or roll_summary.empty:
+            return {}
+
+        # Фильтруем итоговые строки
+        roll_data = roll_summary[~roll_summary["Стандартный формат"].str.contains("ИТОГО", na=False)].copy()
+
+        metrics = {}
+
+        for roll_format in roll_data["Формат рулона"].unique():
+            if roll_format in ["Отдельный лист", "Нестандартный"]:
+                continue
+
+            roll_group = roll_data[roll_data["Формат рулона"] == roll_format]
+
+            total_area = 0.0  # м²
+            total_length = 0.0  # м
+
+            # Извлекаем ширину рулона из названия (например "420мм" -> 420)
+            roll_width_mm = float(roll_format.replace("мм", ""))
+
+            for _, row in roll_group.iterrows():
+                count = row["Количество"]
+                size_str = row["Размер стандарта"]  # например "594x420"
+
+                # Парсим размер формата
+                try:
+                    parts = size_str.split("x")
+                    width_mm = float(parts[0])
+                    height_mm = float(parts[1])
+
+                    # Определяем, какая сторона идет вдоль рулона
+                    # Рулон имеет ширину roll_width_mm, листы режутся вдоль
+                    if abs(width_mm - roll_width_mm) <= self.tolerance:
+                        length_per_sheet = height_mm
+                    elif abs(height_mm - roll_width_mm) <= self.tolerance:
+                        length_per_sheet = width_mm
+                    else:
+                        # Берем большую сторону как длину
+                        length_per_sheet = max(width_mm, height_mm)
+
+                    # Площадь одного листа
+                    area_per_sheet = (width_mm * height_mm) / 1_000_000  # м²
+
+                    total_area += area_per_sheet * count
+                    total_length += (length_per_sheet / 1000) * count  # м
+
+                except (ValueError, IndexError):
+                    continue
+
+            metrics[roll_format] = {
+                "area_m2": round(total_area, 2),
+                "length_m": round(total_length, 2),
+                "width_mm": roll_width_mm,
+                "sheets_count": int(roll_group["Количество"].sum())
+            }
+
+        return metrics
 
     def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str, roll_summary: pd.DataFrame = None) -> str:
         """Формирует текстовый отчёт для вывода в GUI/копирования."""
@@ -594,56 +746,59 @@ class PDFAnalyzer:
         # 🧻 СВОДКА ПО РУЛОНАМ
         if roll_summary is not None and not roll_summary.empty:
             lines.append("🧻 СВОДКА ПО РУЛОНАМ:")
-            
+
+            # Фильтруем итоговые строки (они только для Excel)
+            roll_summary_filtered = roll_summary[~roll_summary["Стандартный формат"].str.contains("ИТОГО", na=False)].copy()
+
             # Группировка сначала по файлу, потом по формату рулона
-            for file_name, file_group in roll_summary.groupby("Файл"):
+            for file_name, file_group in roll_summary_filtered.groupby("Файл"):
                 lines.append(f"\n    📄 {file_name}:")
-                
+
                 for roll_fmt, roll_group in file_group.groupby("Формат рулона"):
                     # Пропускаем "Нестандартный" рулон
                     if roll_fmt == "Нестандартный":
                         continue
-                    
+
                     total_in_roll = int(roll_group["Количество"].sum())
-                    
+
                     # Собираем все страницы для этого рулона (расширяя диапазоны)
                     all_pages_for_roll = []
                     for _, row in roll_group.iterrows():
                         bw_pages = row["Ч/Б страницы"]
                         all_pages_for_roll.extend(self.expand_ranges(bw_pages))
-                        
+
                         col_pages = row["Цветные страницы"]
                         all_pages_for_roll.extend(self.expand_ranges(col_pages))
-                    
+
                     # Сортируем и форматируем список страниц
                     all_pages_for_roll = sorted(set(all_pages_for_roll))
                     if self.compress_ranges_y and all_pages_for_roll:
                         pages_for_roll_str = self.compress_ranges(",".join(map(str, all_pages_for_roll)))
                     else:
                         pages_for_roll_str = ",".join(map(str, all_pages_for_roll)) if all_pages_for_roll else "-"
-                    
+
                     lines.append(f"        🧻 Рулон {roll_fmt}: {total_in_roll} стр.: {pages_for_roll_str}")
-                    
+
                     for _, row in roll_group.iterrows():
                         fmt = row["Стандартный формат"]
                         size = row["Размер стандарта"]
                         count = int(row["Количество"])
                         bw_pages = row["Ч/Б страницы"]
                         col_pages = row["Цветные страницы"]
-                        
+
                         # Объединяем ч/б и цветные страницы (расширяя диапазоны)
                         fmt_pages = self.expand_ranges(bw_pages) + self.expand_ranges(col_pages)
                         fmt_pages = sorted(set(fmt_pages))
-                        
+
                         if self.compress_ranges_y and fmt_pages:
                             fmt_pages_str = self.compress_ranges(",".join(map(str, fmt_pages)))
                         else:
                             fmt_pages_str = ",".join(map(str, fmt_pages)) if fmt_pages else "-"
-                        
+
                         lines.append(
                             f"                {fmt} {size} ({count} стр.): {fmt_pages_str}"
                         )
-            
+
             lines.append("")
 
         # Ошибки (если были)
@@ -655,7 +810,69 @@ class PDFAnalyzer:
         else:
             lines.append("✅ Ошибок не обнаружено")
 
-        return "\n".join(lines) 
+        return "\n".join(lines)
+
+    def calculate_roll_metrics(self, df: pd.DataFrame, roll_summary: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+        """Рассчитывает метрики для каждого типа рулона: площадь и длину.
+
+        Возвращает словарь вида:
+        {
+            "420мм": {"area_m2": 12.5, "length_m": 30.0, "sheets_count": 15},
+            "594мм": {"area_m2": 8.3, "length_m": 14.0, "sheets_count": 7},
+            ...
+        }
+        """
+        if roll_summary is None or roll_summary.empty:
+            return {}
+
+        # Фильтруем только строки форматов (не итоговые строки рулонов)
+        roll_data = roll_summary[roll_summary["Стандартный формат"] != "ИТОГО"].copy()
+
+        if roll_data.empty:
+            return {}
+
+        metrics = {}
+
+        # Группируем по формату рулона
+        for roll_format, group in roll_data.groupby("Формат рулона"):
+            if roll_format == "Отдельный лист":
+                continue
+
+            total_area_m2 = 0.0
+            total_length_m = 0.0
+            total_sheets = 0
+
+            for _, row in group.iterrows():
+                count = row["Количество"]
+                size_str = row["Размер стандарта"]
+
+                # Парсим размер (например "594x420")
+                try:
+                    parts = size_str.split('x')
+                    if len(parts) == 2:
+                        w_mm = float(parts[0])
+                        h_mm = float(parts[1])
+
+                        # Площадь одного листа в м²
+                        area_one_m2 = (w_mm * h_mm) / 1_000_000
+                        total_area_m2 += area_one_m2 * count
+
+                        # Длина = большая сторона
+                        length_one_m = max(w_mm, h_mm) / 1000
+                        total_length_m += length_one_m * count
+
+                        total_sheets += count
+                except (ValueError, IndexError):
+                    continue
+
+            if total_sheets > 0:
+                metrics[roll_format] = {
+                    "area_m2": round(total_area_m2, 2),
+                    "length_m": round(total_length_m, 2),
+                    "sheets_count": total_sheets
+                }
+
+        return metrics
 
 class MainWindow:
     
@@ -686,12 +903,13 @@ class MainWindow:
         self.last_result = initial_result  # (df, summary, out_path) или None
 
         self._build_ui()
-       
+
         # если уже есть результат (CLI-сценарий) — сразу показываем его
         if self.last_result is not None:
             df, summary, out_path, roll_summary = self.last_result
             report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
+            self._update_roll_visualization(df, roll_summary)
         else:
             self._set_stats_text("Выберите файл или папку для анализа PDF документов.")
 
@@ -749,12 +967,20 @@ class MainWindow:
                                             font=(font_face, 10))
         self.formats_count_status_label.pack(anchor=tk.W)
 
-        # Центральная область — текст отчёта (должна быть инициализирована ДО refresh_config)
-        center_frame = ttk.LabelFrame(root, text="Отчёт", padding=10)
+        # Центральная область — вкладки
+        center_frame = ttk.Frame(root)
         center_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
 
+        # Создаем Notebook для вкладок
+        self.notebook = ttk.Notebook(center_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Вкладка 1: Текстовый отчет
+        report_tab = ttk.Frame(self.notebook)
+        self.notebook.add(report_tab, text="📄 Отчёт")
+
         self.stats_text = tk.Text(
-            center_frame,
+            report_tab,
             wrap=tk.WORD,
             font=(font_face, 10),
             bg="#f8f9fa",
@@ -765,15 +991,56 @@ class MainWindow:
             padx=10,
             pady=10,
         )
-        
+
+        scroll_report = ttk.Scrollbar(report_tab, orient=tk.VERTICAL, command=self.stats_text.yview)
+        self.stats_text.configure(yscrollcommand=scroll_report.set)
+        scroll_report.pack(side=tk.RIGHT, fill=tk.Y)
+        self.stats_text.pack(fill=tk.BOTH, expand=True)
+
+        # Вкладка 2: Визуализация рулонов
+        viz_tab = ttk.Frame(self.notebook)
+        self.notebook.add(viz_tab, text="📊 Загрузка рулонов")
+
+        # Canvas с прокруткой для графиков
+        self.viz_canvas = tk.Canvas(viz_tab, bg="#f8f9fa")
+        viz_scrollbar = ttk.Scrollbar(viz_tab, orient=tk.VERTICAL, command=self.viz_canvas.yview)
+
+        # Контейнер для графиков внутри Canvas
+        self.viz_frame = ttk.Frame(self.viz_canvas)
+
+        # Создаем окно внутри Canvas
+        self.viz_canvas_window = self.viz_canvas.create_window((0, 0), window=self.viz_frame, anchor="nw")
+
+        # Настраиваем прокрутку
+        self.viz_canvas.configure(yscrollcommand=viz_scrollbar.set)
+
+        # Упаковываем элементы
+        viz_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.viz_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Обновление размеров при изменении содержимого
+        self.viz_frame.bind("<Configure>", lambda e: self.viz_canvas.configure(scrollregion=self.viz_canvas.bbox("all")))
+
+        # Обновление ширины окна при изменении размера Canvas
+        self.viz_canvas.bind("<Configure>", lambda e: self.viz_canvas.itemconfig(self.viz_canvas_window, width=e.width))
+
+        # Прокрутка колесиком мыши
+        def _on_mousewheel(event):
+            self.viz_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+        self.viz_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Placeholder для графиков
+        self.viz_placeholder = ttk.Label(
+            self.viz_frame,
+            text="Выполните анализ для просмотра визуализации загрузки рулонов",
+            font=(font_face, 12),
+            foreground="#666"
+        )
+        self.viz_placeholder.pack(expand=True)
+
         # Обновляем статус в интерфейсе (после инициализации stats_text)
         self.refresh_config()
-        
-        scroll = ttk.Scrollbar(center_frame, orient=tk.VERTICAL, command=self.stats_text.yview)
-        self.stats_text.configure(yscrollcommand=scroll.set)
-
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.stats_text.pack(fill=tk.BOTH, expand=True)
 
         # Нижняя панель — сервисные кнопки
         bottom_frame = ttk.Frame(root, padding=10)
@@ -783,7 +1050,7 @@ class MainWindow:
         ttk.Button(bottom_frame, text="Копировать отчёт", command=self.copy_report).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(bottom_frame, text="📊 Excel отчет", command=self.open_excel_report).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(bottom_frame, text="📁 Папка отчетов", command=self.open_reports_folder).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(bottom_frame, text="Выход", command=root.destroy).pack(side=tk.RIGHT, padx=(5, 0))       
+        ttk.Button(bottom_frame, text="Выход", command=root.destroy).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(bottom_frame, text="💾 Сохранить отчёт", command=self.save_report_to_file).pack(side=tk.RIGHT, padx=(5, 0))
 
         #Статус бар
@@ -827,6 +1094,119 @@ class MainWindow:
         self.stats_text.delete("1.0", tk.END)
         self.stats_text.insert(tk.END, text)
         self.stats_text.config(state=tk.DISABLED)
+
+    def _update_roll_visualization(self, df: pd.DataFrame, roll_summary: pd.DataFrame):
+        """Обновляет визуализацию загрузки рулонов."""
+
+        # Очищаем старые графики
+        for widget in self.viz_frame.winfo_children():
+            widget.destroy()
+
+        if roll_summary is None or roll_summary.empty:
+            no_data_label = ttk.Label(
+                self.viz_frame,
+                text="Нет данных по рулонам для визуализации",
+                font=(font_face, 12),
+                foreground="#999"
+            )
+            no_data_label.pack(expand=True)
+            return
+
+        # Рассчитываем метрики
+        metrics = self.analyzer.calculate_roll_metrics(df, roll_summary)
+
+        if not metrics:
+            no_data_label = ttk.Label(
+                self.viz_frame,
+                text="Нет данных по рулонам для визуализации",
+                font=(font_face, 12),
+                foreground="#999"
+            )
+            no_data_label.pack(expand=True)
+            return
+
+        # Создаем фигуру с двумя круговыми диаграммами
+        fig = Figure(figsize=(12, 5), dpi=100)
+        fig.patch.set_facecolor('#f8f9fa')
+
+        # Диаграмма 1: Площадь печати
+        ax1 = fig.add_subplot(121)
+        roll_names = list(metrics.keys())
+        areas = [metrics[roll]["area_m2"] for roll in roll_names]
+
+        colors = ['#38BDF8', '#22D3EE', '#4FD1C5', '#F97316', '#F59E0B']
+
+        wedges1, texts1, autotexts1 = ax1.pie(
+            areas,
+            labels=[f"{roll}\n{metrics[roll]['sheets_count']} листов" for roll in roll_names],
+            autopct='%1.1f%%',
+            startangle=90,
+            colors=colors[:len(roll_names)],
+            textprops={'fontsize': 9, 'color': '#1E293B'}
+        )
+
+        for autotext in autotexts1:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+            autotext.set_fontsize(10)
+
+        ax1.set_title('Распределение площади печати по рулонам',
+                     fontsize=12, fontweight='bold', color='#0F172A', pad=20)
+
+        # Добавляем легенду с площадями
+        legend_labels1 = [f"{roll}: {metrics[roll]['area_m2']} м²" for roll in roll_names]
+        ax1.legend(legend_labels1, loc='upper left', bbox_to_anchor=(0, -0.1),
+                  fontsize=9, frameon=False)
+
+        # Диаграмма 2: Длина рулона
+        ax2 = fig.add_subplot(122)
+        lengths = [metrics[roll]["length_m"] for roll in roll_names]
+
+        wedges2, texts2, autotexts2 = ax2.pie(
+            lengths,
+            labels=[f"{roll}\n{metrics[roll]['sheets_count']} листов" for roll in roll_names],
+            autopct='%1.1f%%',
+            startangle=90,
+            colors=colors[:len(roll_names)],
+            textprops={'fontsize': 9, 'color': '#1E293B'}
+        )
+
+        for autotext in autotexts2:
+            autotext.set_color('white')
+            autotext.set_fontweight('bold')
+            autotext.set_fontsize(10)
+
+        ax2.set_title('Распределение длины рулонов',
+                     fontsize=12, fontweight='bold', color='#0F172A', pad=20)
+
+        # Добавляем легенду с длинами
+        legend_labels2 = [f"{roll}: {metrics[roll]['length_m']} м" for roll in roll_names]
+        ax2.legend(legend_labels2, loc='upper left', bbox_to_anchor=(0, -0.1),
+                  fontsize=9, frameon=False)
+
+        fig.tight_layout(pad=3.0)
+
+        # Встраиваем в Tkinter
+        canvas = FigureCanvasTkAgg(fig, master=self.viz_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Добавляем итоговую информацию внизу
+        info_frame = ttk.Frame(self.viz_frame)
+        info_frame.pack(fill=tk.X, pady=10)
+
+        total_area = sum(areas)
+        total_length = sum(lengths)
+        total_sheets = sum(metrics[roll]['sheets_count'] for roll in roll_names)
+
+        info_text = f"📊 ИТОГО:  {total_sheets} листов  |  {total_area:.2f} м²  |  {total_length:.2f} м"
+        info_label = ttk.Label(info_frame, text=info_text, font=(font_face, 11, 'bold'),
+                              foreground='#0F172A')
+        info_label.pack()
+
+        # Обновляем область прокрутки после добавления графиков
+        self.viz_frame.update_idletasks()
+        self.viz_canvas.configure(scrollregion=self.viz_canvas.bbox("all"))
 
     # ---------- обработчики кнопок ----------
 
@@ -874,15 +1254,19 @@ class MainWindow:
         
         try:
             df, summary, out_path, roll_summary = self.analyzer.process_path(
-                path, 
+                path,
                 progress_callback=self._update_progress
             )
             self.last_result = (df, summary, out_path, roll_summary)
             report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
+
+            # Обновляем визуализацию рулонов
+            self._update_roll_visualization(df, roll_summary)
+
             # 🆕 АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ТЕКСТОВОГО ОТЧЁТА
-            self._save_report_auto(df, summary, out_path, report_text, roll_summary)           
-            
+            self._save_report_auto(df, summary, out_path, report_text, roll_summary)
+
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
             
@@ -1198,17 +1582,20 @@ class MainWindow:
         """Пересчитывает отображение результатов с новым compress_ranges"""
         if not self.last_result:
             return
-        
+
         # Проверяем, инициализирован ли stats_text (на случай вызова до _build_ui)
         if not hasattr(self, 'stats_text'):
             return
-            
+
         # Пересчитываем с новыми настройками
         df, summary, out_path, roll_summary = self.last_result
         report = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
-        
+
         # Обновляем Text виджет
         self._set_stats_text(report)
+
+        # Обновляем визуализацию
+        self._update_roll_visualization(df, roll_summary)
 
     # ---------- запуск ----------
 
