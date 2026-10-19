@@ -10,7 +10,9 @@
 Позволяет работать как с одним файлом, так и целой папкой, включая вложенные.
 
 [ChangeLog](CHANGELOG.md)
+
 [СКАЧАТЬ установщик для Windows](https://github.com/shadowdfd/PDF-pages-analizer/releases/latest/download/setup_PDFpages_Pro.exe)
+
 [Последняя версия](https://github.com/shadowdfd/PDF-pages-analizer/releases/latest/)
 
 Позволяет определить:
