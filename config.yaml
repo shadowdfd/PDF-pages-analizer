@@ -1,5 +1,6 @@
-tolerance_mm: 10.0
+tolerance_mm: 7.0
 compress_ranges: true
+pt_to_mm: 0.3528
 formats:
   A0: [841, 1189]
   A0x2: [1189, 1682]
@@ -43,3 +44,4 @@ formats:
   A2x9: [594, 3784]
   A3x8: [420, 2378]
   A3x9: [420, 2676]
+  Квадрат 594: [594, 594]

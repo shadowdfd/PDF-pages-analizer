@@ -4,6 +4,7 @@
 DEFAULT_SETTINGS = {
     "tolerance_mm": 5.0,
     "compress_ranges": True,
+    "pt_to_mm": 0.3528,
 }
 
 # Дефолтные ФОРМАТЫ (загружаются только по запросу)

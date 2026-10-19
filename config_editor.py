@@ -43,7 +43,8 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         
         # Настройки окна
         self.title(f"Редактор конфигурации {version}")
-        self.geometry("500x500") # Ширина x Высота
+        self.geometry("500x550") # Ширина x Высота
+        self.minsize(500, 550)
         self.resizable(True, True)
         self.changes_is_saved = True
         self.config = self._load_config()
@@ -139,10 +140,13 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
             self.config["tolerance_mm"] = DEFAULT_SETTINGS["tolerance_mm"]
         if "compress_ranges" not in self.config:
             self.config["compress_ranges"] = DEFAULT_SETTINGS["compress_ranges"]
+        if "pt_to_mm" not in self.config:
+            self.config["pt_to_mm"] = DEFAULT_SETTINGS["pt_to_mm"]
         
         print(f"✅ Загружен: {self.config_path}")
         print(f"📐 tolerance_mm: {self.config['tolerance_mm']}")
         print(f"📦 compress_ranges: {self.config['compress_ranges']}")
+        print(f"📏 pt_to_mm: {self.config['pt_to_mm']}")
         print(f"📋 Форматов: {len(self.config['formats'])}")
         
         return self.config
@@ -188,17 +192,34 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         main_frame = ttk.Frame(notebook)
         notebook.add(main_frame, text="Основные настройки")
 
-        # ✅ 100% БЕЗОПАСНЫЙ ВАРИАНТ - StringVar + Entry.get()
-        tolerance_frame = ttk.Frame(main_frame)
-        tolerance_frame.pack(fill=tk.X, pady=(10, 0))
+######### Параметр допуска распознавания форматов
+        tolerance_frame = ttk.Frame(main_frame, borderwidth=1, relief=tk.SOLID, padding=5)
+        tolerance_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
 
-        self.tolerance_label = ttk.Label(tolerance_frame, text="Допуск распознавания форматов, мм:", font=(font_face, 10))
-        self.tolerance_label.pack(side=tk.LEFT, pady=(0, 0), padx=(10, 8))
+        # Метка
+        self.tolerance_label = ttk.Label(tolerance_frame, text="Допуск распознавания форматов", font=(font_face, 10, "bold"), justify="left")
+        self.tolerance_label.pack(fill=tk.X, pady=(0, 0), padx=(10, 8))
 
-        # StringVar НЕ выбрасывает ошибки!
+        # Описание под меткой
+        tolerance_info_text = (
+            "Значение допуска в миллиметрах, для определения соответствия \n"
+            "распознаваемых листов установленным форматам \n"
+            "(допустимы дробные значения). Для лазерных МФУ/принтеров \n"
+            "Kyocera рекомендуется значение 7 мм, для Canon — 5 мм."
+        )   
+        self.tolerance_label_info = ttk.Label(tolerance_frame, text=tolerance_info_text, font=(font_face, 9), justify="left")
+        self.tolerance_label_info.pack(fill=tk.X, pady=(0, 5), padx=(20, 8))
+
+        tolerance_entry_frame = ttk.Frame(tolerance_frame)
+        tolerance_entry_frame.pack(fill=tk.X, pady=(0, 5), padx=(10, 8))
+
+        self.tolerance_entry_label = ttk.Label(tolerance_entry_frame, text="Значение допуска (мм):", font=(font_face, 10), justify="left")
+        self.tolerance_entry_label.pack(side=tk.LEFT, pady=(0, 0), padx=(10, 8))
+
+        # Entry для ввода допуска
         self.tolerance_var = tk.StringVar(value=str(self.config["tolerance_mm"]))
         self.tolerance_entry = tk.Entry(  # Сохраняем ссылку!
-            tolerance_frame, 
+            tolerance_entry_frame, 
             textvariable=self.tolerance_var,
             width=8,
             font=(font_face, 10),
@@ -206,38 +227,96 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
             bg="white"
         )
         self.tolerance_var.trace_add('write', self._on_tolerance_change)
-           
         self.tolerance_entry.pack(side=tk.LEFT, pady=2)
         self.tolerance_entry.focus_set()
 
-        self.tolerance_status_label = ttk.Label(tolerance_frame, font=(font_face, 10))
+        # Статусная метка для отображения ошибок/подсказок
+        self.tolerance_status_label = ttk.Label(tolerance_entry_frame, font=(font_face, 10))
         self.tolerance_status_label.pack(side=tk.LEFT, padx=(15, 0))
 
-        # ✅ ТОЛЬКО bind к Entry, НЕ к Var!
+        # Привязка событий для проверки ввода допуска
         self.tolerance_entry.bind("<KeyRelease>", self._check_tolerance_safe)
         self.tolerance_entry.bind("<FocusOut>", self._check_tolerance_safe)
 
-        # Разделитель
-        # ttk.Separator(main_frame, orient="horizontal").pack(fill=tk.X, pady=2)
-        
-        # Флажок сжатия диапазонов
-        compress_frame = ttk.Frame(main_frame)
-        compress_frame.pack(fill=tk.X, pady=(10, 0))
+######### Параметр перевода пунктов в миллиметры
+        pt_to_mm_frame = ttk.Frame(main_frame, borderwidth=1, relief=tk.SOLID, padding=5)
+        pt_to_mm_frame.pack(fill=tk.X, padx=10, pady=(8, 0))
 
+        # Метка
+        self.pt_to_mm_label = ttk.Label(pt_to_mm_frame, text="Коэффициент перевода пунктов (pt) в миллиметры (mm)", font=(font_face, 10, "bold"), justify="left")
+        self.pt_to_mm_label.pack(fill=tk.X, pady=(0, 0), padx=(10, 8))
+
+        # Описание под меткой
+        pt_to_mm_info_text = (
+            "Внутри формата PDF используются пункты (pt) для определения размеров\n"
+            "объектов. Поэтому необходим коэффициент перевода значений из пунктов\n"
+            "(pt) в миллиметры (mm). Значение по-умолчанию 0.3528.\n"
+            "Корректировка может потребоваться в редких случаях, например,\n"
+            "при нестандартных шрифтах или масштабировании PDF."
+        )   
+        self.pt_to_mm_label_info = ttk.Label(pt_to_mm_frame, text=pt_to_mm_info_text, font=(font_face, 9), justify="left")
+        self.pt_to_mm_label_info.pack(fill=tk.X, pady=(0, 5), padx=(20, 8))
+
+        pt_to_mm_entry_frame = ttk.Frame(pt_to_mm_frame)
+        pt_to_mm_entry_frame.pack(fill=tk.X, pady=(0, 5), padx=(10, 8))
+
+        self.pt_to_mm_entry_label = ttk.Label(pt_to_mm_entry_frame, text="Значение коэффициента (мм/pt):", font=(font_face, 10), justify="left")
+        self.pt_to_mm_entry_label.pack(side=tk.LEFT, pady=(0, 0), padx=(10, 8))
+
+        # Entry для ввода допуска     
+        self.pt_to_mm_var = tk.StringVar(value=str(self.config.get("pt_to_mm", DEFAULT_SETTINGS["pt_to_mm"])))
+        self.pt_to_mm_entry = tk.Entry(
+            pt_to_mm_entry_frame,
+            textvariable=self.pt_to_mm_var,
+            width=10,
+            font=(font_face, 10),
+            justify="center",
+            bg="white",
+        )
+        self.pt_to_mm_var.trace_add('write', self._on_tolerance_change)
+        self.pt_to_mm_entry.pack(side=tk.LEFT, pady=2)
+        # Привязка событий для проверки ввода коэффициента
+        self.pt_to_mm_entry.bind("<KeyRelease>", self._check_pt_to_mm_safe)
+        self.pt_to_mm_entry.bind("<FocusOut>", self._check_pt_to_mm_safe)
+        # Статусная метка для отображения ошибок/подсказок
+        self.pt_to_mm_status_label = ttk.Label(pt_to_mm_entry_frame, font=(font_face, 10))
+        self.pt_to_mm_status_label.pack(side=tk.LEFT, padx=(15, 0))
+
+######### Флажок сжатия диапазонов
+        compress_frame = ttk.Frame(main_frame, borderwidth=1, relief=tk.SOLID, padding=5)
+        compress_frame.pack(fill=tk.X, padx=10, pady=(8, 0))
+
+        # Метка
+        self.compress_ranges_label = ttk.Label( compress_frame, text="Тип диапазонов страниц в отчетах", font=(font_face, 10, "bold"), justify="left")
+        self.compress_ranges_label.pack(fill=tk.X, pady=(0, 0), padx=(10, 8))
+        
+        # Описание под меткой
+        compress_info_text = (
+            "Сжатый диапозон выглядит как 1-4,6-8 (по умолчанию).\n"
+            "Несжатый диапозон выглядит как 1,2,3,4,6,7,8.\n"
+            "Сжатый диапозон удобнее для восприятия, но может быть не всегда \n"
+            "корректно обработан некоторыми программами. Несжатый диапозон \n"
+            "более универсален, но занимает больше места в отчетах."
+        )   
+        self.compress_ranges_label_info = ttk.Label(compress_frame, text=compress_info_text, font=(font_face, 9), justify="left")
+        self.compress_ranges_label_info.pack(fill=tk.X, pady=(0, 5), padx=(20, 8))
+        
+        compress_entry_frame = ttk.Frame(compress_frame)
+        compress_entry_frame.pack(fill=tk.X, pady=(0, 5), padx=(10, 8))
+
+        # checkbutton
         self.compress_ranges_var = tk.BooleanVar(value=self.config.get("compress_ranges", True))
         compress_check = ttk.Checkbutton(
-            compress_frame,
-            text="Сжимать последовательные страницы (1,2,3,4 → 1-4)",
+            compress_entry_frame,
+            text="Сжимать диапазоны",
             variable=self.compress_ranges_var,
             state="normal",
             command=self.changes_made
+            
         )
         compress_check.pack(anchor=tk.W, padx=10)
 
-        ttk.Label(compress_frame, text="Пример: 1,2,3,45,46,47 → 1-3,45-47",
-                font=(font_face, 9), foreground="gray").pack(anchor=tk.W, pady=(2, 0), padx=40)
-
-        # Вкладка "Форматы"
+######### Вкладка "Форматы"
         formats_frame = ttk.Frame(notebook)
         notebook.add(formats_frame, text="Форматы")
 
@@ -263,9 +342,9 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         btn_frame_left = ttk.Frame(left_frame)
         btn_frame_left.pack(fill=tk.X, pady=5)
 
-        self.delete_btn = ttk.Button(btn_frame_left, text="Удалить", command=self.delete_format)
+        self.delete_btn = tk.Button(btn_frame_left, text="Удалить", command=self.delete_format, bg="#405361", fg="#ffffff")
         self.delete_btn.pack(side=tk.LEFT, padx=(5, 0))
-        self.delete_all_btn = ttk.Button(btn_frame_left, text="Удалить все", command=self.delete_all_formats)
+        self.delete_all_btn = tk.Button(btn_frame_left, text="Удалить все", command=self.delete_all_formats, bg="#405361", fg="#ffffff")
         self.delete_all_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         # Правая панель — редактор текущего формата
@@ -289,9 +368,9 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
 
         button_frame = ttk.Frame(right_frame)
         button_frame.pack(fill=tk.X,  side=tk.TOP)
-        self.edit_btn = ttk.Button(button_frame, text="Сохранить", command=self.edit_format)
+        self.edit_btn = tk.Button(button_frame, text="Сохранить", command=self.edit_format, bg="#405361", fg="#ffffff")
         self.edit_btn.pack(side=tk.LEFT, padx=(0, 5), pady=(10, 0))
-        self.add_btn = ttk.Button(button_frame, text="Добавить", command=self.add_format)
+        self.add_btn = tk.Button(button_frame, text="Добавить", command=self.add_format, bg="#405361", fg="#ffffff")
         self.add_btn.pack(side=tk.LEFT, padx=(0, 5), pady=(10, 0))
         
         # по умолчанию выключаем, если список пуст
@@ -301,18 +380,19 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         right_bottomframe = ttk.Frame(right_frame, padding=0)
         right_bottomframe.pack(side=tk.BOTTOM, anchor=tk.SW,  fill=tk.X, expand=False)
 
-        self.load_gost_btn = ttk.Button(right_bottomframe, text="Добавить форматы из ГОСТ", command=self.add_gost_formats, width=30)
+        self.load_gost_btn = tk.Button(right_bottomframe, text="Добавить форматы из ГОСТ", command=self.add_gost_formats, width=30, bg="#405361", fg="#ffffff")
         self.load_gost_btn.pack(side=tk.TOP, padx=(5, 0), pady=(5, 5))
-        self.load_gost_addformats_btn = ttk.Button(right_bottomframe, text="Добавить доп. форматы", command=self.add_gost_addformats, width=30)
+        self.load_gost_addformats_btn = tk.Button(right_bottomframe, text="Добавить доп. форматы", command=self.add_gost_addformats, width=30, bg="#405361", fg="#ffffff")
         self.load_gost_addformats_btn.pack(side=tk.TOP, padx=(5, 0), pady=(5, 5), after=self.load_gost_btn)
 
-        # Нижняя панель кнопок
+######### Нижняя панель кнопок
+
         bottom_frame = ttk.Frame(self)
         bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 0))
 
-        ttk.Button(bottom_frame, text="💾 Сохранить", command=self.save_config).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(bottom_frame, text="💾 Сохранить и закрыть", command=self.save_and_close).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(bottom_frame, text="Закрыть без сохранения", command=self.on_closing).pack(side=tk.RIGHT)
+        tk.Button(bottom_frame, text="Сохранить", command=self.save_config, bg="#405361", fg="#ffffff").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(bottom_frame, text="Сохранить и закрыть", command=self.save_and_close, bg="#405361", fg="#ffffff").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Button(bottom_frame, text="Закрыть без сохранения", command=self.on_closing, bg="#405361", fg="#ffffff").pack(side=tk.RIGHT)
 
         #Статус бар
         status_frame = ttk.Frame(self)
@@ -359,6 +439,22 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
                 
         except ValueError:
             self.tolerance_status_label.config(text="✗ Только число", foreground="red")
+
+    def _check_pt_to_mm_safe(self, event=None):
+        """Проверяет значение коэффициента pt_to_mm."""
+        try:
+            text = self.pt_to_mm_entry.get().strip()
+            if not text:
+                self.pt_to_mm_status_label.config(text="✗ Введите число", foreground="red")
+                return
+
+            num = float(text.replace(",", "."))
+            if 0.01 <= num <= 1.0:
+                self.pt_to_mm_status_label.config(text="✓ Корректно", foreground="green")
+            else:
+                self.pt_to_mm_status_label.config(text="✗ 0.01–1.00", foreground="red")
+        except ValueError:
+            self.pt_to_mm_status_label.config(text="✗ Только число", foreground="red")
 
 # Управление форматами
 
@@ -534,19 +630,30 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
     def save_config(self):
         try:
             # ЧИТАЕМ Entry напрямую!
-            text = self.tolerance_entry.get().strip().replace(",", ".")
-            if not text:
+            tolerance_text = self.tolerance_entry.get().strip().replace(",", ".")
+            if not tolerance_text:
                 messagebox.showerror("Ошибка", "Введите допуск!")
                 return
                 
-            num = float(text)
-            if not (0.01 <= num <= 50.0):
+            tolerance_num = float(tolerance_text)
+            if not (0.01 <= tolerance_num <= 50.0):
                 messagebox.showerror("Ошибка", "Допуск: 0.01–50.0 мм!")
+                return
+
+            pt_text = self.pt_to_mm_entry.get().strip().replace(",", ".")
+            if not pt_text:
+                messagebox.showerror("Ошибка", "Введите коэффициент pt → мм!")
+                return
+
+            pt_num = float(pt_text)
+            if not (0.01 <= pt_num <= 1.0):
+                messagebox.showerror("Ошибка", "Коэффициент pt → мм: 0.01–1.00!")
                 return
             
             # Сохраняем в конфиг
-            self.config["tolerance_mm"] = num
+            self.config["tolerance_mm"] = tolerance_num
             self.config["compress_ranges"] = self.compress_ranges_var.get()
+            self.config["pt_to_mm"] = pt_num
             
             # Сохраняем в файл
             with open(self.config_path, 'w', encoding='utf-8') as f:

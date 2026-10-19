@@ -29,8 +29,8 @@ VSVersionInfo(
       [
       StringTable(
         'FFFF04B0',
-        [StringStruct('FileVersion', '1.4.1'),
-        StringStruct('ProductVersion', '1.4.1'),
+        [StringStruct('FileVersion', '1.6.0'),
+        StringStruct('ProductVersion', '1.6.0'),
         StringStruct('LegalCopyright', 'Copyright © 2026 Vadim Rodionov'),
         StringStruct('LegalTrademarks', ''),
         StringStruct('FileDescription', 'Определение носителей для печати'),

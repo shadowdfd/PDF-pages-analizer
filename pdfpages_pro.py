@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 from typing import Dict, Any
 import subprocess
 import platform
@@ -13,6 +14,10 @@ from pathlib import Path
 #import threading
 import webbrowser
 import setting
+try:
+    from tkinterdnd2 import TkinterDnD
+except ImportError:
+    TkinterDnD = None
 import matplotlib
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -34,6 +39,7 @@ class PDFAnalyzer:
         self.config = {}
         self.tolerance = DEFAULT_SETTINGS["tolerance_mm"]
         self.compress_ranges_y = DEFAULT_SETTINGS["compress_ranges"]
+        self.pt_to_mm = DEFAULT_SETTINGS["pt_to_mm"]
         self.formats = {}  # Будут загружены из конфига в apply_config()
 
         # Обнуляем статистику
@@ -72,6 +78,7 @@ class PDFAnalyzer:
         self.config = merged_config
         self.tolerance = merged_config.get("tolerance_mm", DEFAULT_SETTINGS["tolerance_mm"])
         self.compress_ranges_y = merged_config.get("compress_ranges", DEFAULT_SETTINGS["compress_ranges"])
+        self.pt_to_mm = float(merged_config.get("pt_to_mm", DEFAULT_SETTINGS["pt_to_mm"]))
         # Форматы - только из config, без дефолтов
         self.formats = {k: tuple(v) for k, v in (config or {}).get("formats", {}).items()}
         self.config["formats"] = self.formats
@@ -359,7 +366,7 @@ class PDFAnalyzer:
             doc = fitz.open(pdf_path)
             self.stats["pages_processed"] += len(doc)
 
-            for i, page in enumerate(doc, start=1):
+            for i, page in enumerate(doc, start=1): # type: ignore
                 rotation = page.rotation
                 rect = page.rect
                 w_pt, h_pt = rect.width, rect.height
@@ -510,7 +517,7 @@ class PDFAnalyzer:
         )
         raise PermissionError(f"Невозможно сохранить {current_path}: файл остаётся занят")
 
-    def process_path(self, path: str, progress_callback=None) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
+    def process_path(self, path: str, progress_callback=None, save_excel: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
         """Главная функция обработки"""
         
         all_data = []
@@ -529,9 +536,11 @@ class PDFAnalyzer:
         elif path_obj.is_dir():
             base_name = path_obj.name
             out_dir = path_obj
-            pdf_files = list(path_obj.glob("*.pdf"))
-            self.stats["files_skipped"] = len([f for f in path_obj.iterdir() if f.suffix.lower() != ".pdf"])
-            
+            pdf_files = sorted(path_obj.rglob("*.pdf"))
+            self.stats["files_skipped"] = len([
+                f for f in path_obj.rglob("*") if f.is_file() and f.suffix.lower() != ".pdf"
+            ])
+
             # Обрабатываем каждый PDF файл в папке с обновлением прогресса
             for idx, pdf_path in enumerate(pdf_files, start=1):
                 self.process_pdf(str(pdf_path), all_data)
@@ -580,80 +589,25 @@ class PDFAnalyzer:
         out_path = out_dir / f"{base_name}_all_sizes.xlsx"
 
         # Безопасное сохранение Excel с обработкой ошибок при занятом файле
-        saved_path = self.save_excel_safe(out_path, df, summary, roll_summary)
+        saved_path = str(out_path)
+        if save_excel:
+            saved_path = self.save_excel_safe(out_path, df, summary, roll_summary)
 
         self.stats["end_time"] = time.time()  # Засекаем время конца обработки
         return df, summary, saved_path, roll_summary
 
-    def calculate_roll_metrics(self, df: pd.DataFrame, roll_summary: pd.DataFrame) -> Dict[str, Any]:
-        """Рассчитывает метрики загрузки рулонов: площадь и длину."""
-
-        if roll_summary is None or roll_summary.empty:
-            return {}
-
-        # Фильтруем итоговые строки
-        roll_data = roll_summary[~roll_summary["Стандартный формат"].str.contains("ИТОГО", na=False)].copy()
-
-        metrics = {}
-
-        for roll_format in roll_data["Формат рулона"].unique():
-            if roll_format in ["Отдельный лист", "Нестандартный"]:
-                continue
-
-            roll_group = roll_data[roll_data["Формат рулона"] == roll_format]
-
-            total_area = 0.0  # м²
-            total_length = 0.0  # м
-
-            # Извлекаем ширину рулона из названия (например "420мм" -> 420)
-            roll_width_mm = float(roll_format.replace("мм", ""))
-
-            for _, row in roll_group.iterrows():
-                count = row["Количество"]
-                size_str = row["Размер стандарта"]  # например "594x420"
-
-                # Парсим размер формата
-                try:
-                    parts = size_str.split("x")
-                    width_mm = float(parts[0])
-                    height_mm = float(parts[1])
-
-                    # Определяем, какая сторона идет вдоль рулона
-                    # Рулон имеет ширину roll_width_mm, листы режутся вдоль
-                    if abs(width_mm - roll_width_mm) <= self.tolerance:
-                        length_per_sheet = height_mm
-                    elif abs(height_mm - roll_width_mm) <= self.tolerance:
-                        length_per_sheet = width_mm
-                    else:
-                        # Берем большую сторону как длину
-                        length_per_sheet = max(width_mm, height_mm)
-
-                    # Площадь одного листа
-                    area_per_sheet = (width_mm * height_mm) / 1_000_000  # м²
-
-                    total_area += area_per_sheet * count
-                    total_length += (length_per_sheet / 1000) * count  # м
-
-                except (ValueError, IndexError):
-                    continue
-
-            metrics[roll_format] = {
-                "area_m2": round(total_area, 2),
-                "length_m": round(total_length, 2),
-                "width_mm": roll_width_mm,
-                "sheets_count": int(roll_group["Количество"].sum())
-            }
-
-        return metrics
-
-    def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str, roll_summary: pd.DataFrame = None) -> str:
+    def build_report_text(self, df: pd.DataFrame, summary: pd.DataFrame, out_path: str, roll_summary: pd.DataFrame | None) -> str:
         """Формирует текстовый отчёт для вывода в GUI/копирования."""
         
         lines: list[str] = []
 
         # Заголовок и общая статистика
         lines.append(f"=== ОТЧЁТ АНАЛИЗА PDF ===  Дата: {pd.Timestamp.now().strftime('%d.%m.%Y %H:%M')}")
+        report_dir = str(Path(out_path).parent)
+        unique_files = int(df["Файл"].nunique()) if not df.empty and "Файл" in df.columns else 0
         lines.append(f"Файл отчёта: {out_path}")
+        lines.append(f"Каталог отчёта: {report_dir}")
+        lines.append(f"PDF-файлов в выборке: {unique_files}")
         lines.append("")
 
         lines.append("📊 ОБЩАЯ СТАТИСТИКА:")
@@ -812,7 +766,7 @@ class PDFAnalyzer:
 
         return "\n".join(lines)
 
-    def calculate_roll_metrics(self, df: pd.DataFrame, roll_summary: pd.DataFrame) -> Dict[str, Dict[str, float]]:
+    def calculate_roll_metrics(self, df: pd.DataFrame, roll_summary: pd.DataFrame | None) -> Dict[str, Dict[str, float]]:
         """Рассчитывает метрики для каждого типа рулона: площадь и длину.
 
         Возвращает словарь вида:
@@ -874,6 +828,34 @@ class PDFAnalyzer:
 
         return metrics
 
+# ================== TOOLBAR ==================
+class Toolbar(ttk.Frame):
+    def __init__(self, parent, app):
+        super().__init__(parent)
+        self.app = app
+
+    def add_button(self, *, icon, command, tooltip=None, state="normal", text_name=None, side_str = tk.LEFT):
+        btn = ttk.Button(
+            self,
+            image=self.app.icons[icon],
+            command=command,
+            state=state,
+        )
+        if text_name:
+            btn.configure(text=" "+text_name+" ", compound="left")
+
+        btn.pack(side=side_str, padx=2) # type: ignore
+
+        if tooltip:
+            self.app.tooltip(btn, tooltip)
+
+        return btn
+
+    def add_separator(self, side_str=tk.LEFT):
+        ttk.Separator(self, orient="vertical").pack(
+            side=side_str, fill="y", padx=5 # type: ignore
+        )
+
 class MainWindow:
     
     def __init__(self, analyzer, initial_result=None):
@@ -883,7 +865,10 @@ class MainWindow:
           - (df, summary, out_path) → показываем уже готовый отчёт (CLI‑режим)
         """
         self.analyzer = analyzer
-        self.root = tk.Tk()
+        if TkinterDnD is not None:
+            self.root = TkinterDnD.Tk()
+        else:
+            self.root = tk.Tk()
         
         # Загружаем иконку с fallback
         try:
@@ -898,7 +883,8 @@ class MainWindow:
         self.root.geometry("900x650")
         self.root.resizable(True, True)
 
-
+        # Иконки
+        self.load_icons()
 
         self.last_result = initial_result  # (df, summary, out_path) или None
 
@@ -915,6 +901,62 @@ class MainWindow:
 
     # ---------- построение интерфейса ----------
 
+    def load_icons(self):
+        icon_names = [
+            "pdf_file", "folder", "settings", "help", "copy", "save", "order", "cur_settings", "formats16", "margin16", "order16", "icon", "icon48",
+            "openfolder", "formats", "margin","select","txt_report","exit", "xlsx", "diagram", "report", "diagram16", "report16", "text-file"
+        ]
+        self.icons = {
+            name: tk.PhotoImage(
+                file=self.resource_path(f"img/{name}.png")
+            )
+            for name in icon_names
+        }
+
+    def tooltip(self, widget, text, delay=600):
+        tip = tk.Toplevel(widget)
+        tip.withdraw()
+        tip.overrideredirect(True)
+
+        label = ttk.Label(
+            tip,
+            text=text,
+            background="#ffffe0",
+            relief="solid",
+            borderwidth=1,
+            padding=(6, 3)
+        )
+        label.pack()
+
+        after_id = None
+
+        def show():
+            x = widget.winfo_rootx() + 20
+            y = widget.winfo_rooty() + widget.winfo_height() + 5
+            tip.geometry(f"+{x}+{y}")
+            tip.deiconify()
+
+        def on_enter(event):
+            nonlocal after_id
+            after_id = widget.after(delay, show)
+
+        def on_leave(event):
+            nonlocal after_id
+            if after_id:
+                widget.after_cancel(after_id)
+                after_id = None
+            tip.withdraw()
+
+        widget.bind("<Enter>", on_enter)
+        widget.bind("<Leave>", on_leave)
+
+    def image_label(self, parent, icon, ttext: str="", im_padx=2, im_pady=0, im_side = 'left' ):
+        lbl = tk.Label(parent, image=self.icons[icon], bd=0)
+        if ttext:
+            lbl.configure(text=ttext, compound="left")
+        #lbl.image = self.icons['filter']   # важно! чтобы не удалилось сборщиком мусора
+        lbl.pack(side=im_side, padx=im_padx, pady=im_pady)   # type: ignore
+
     def _build_ui(self):
         root = self.root
 
@@ -922,50 +964,23 @@ class MainWindow:
         top_frame = ttk.Frame(root, padding=10)
         top_frame.pack(fill=tk.X)
 
-        # Кнопки управления слева
-        btn_top_frame1 = ttk.Frame(top_frame)
-        btn_top_frame1.pack(side=tk.LEFT, anchor=tk.NW)
+        # Панель кнопок сверху слева
+        top_toolbar = Toolbar(top_frame, self)
+        top_toolbar.pack(side=tk.LEFT, anchor=tk.NW, fill=tk.X, expand=True, padx=0, pady=0)
 
-        ttk.Button(btn_top_frame1, text="📂 Открыть файл", command=self.on_open_file, width=25).pack(side=tk.TOP, padx=5, pady=5)
-        ttk.Button(btn_top_frame1, text="📂 Открыть папку", command=self.on_open_folder, width=25).pack(side=tk.TOP, padx=5, pady=5)
-        
-        btn_top_frame2 = ttk.Frame(btn_top_frame1)
-        btn_top_frame2.pack(side=tk.TOP)
-
-        ttk.Button(btn_top_frame2, text="?", command=self.show_help_window, width=7).pack(side=tk.LEFT, padx=5, pady=5)
-        ttk.Button(btn_top_frame2, text="⚙️ Настройки", command=self.open_config_editor, width=15).pack(side=tk.RIGHT, padx=5, pady=5)
-
-        # Статус config.yaml справа
-        status_frame = ttk.LabelFrame(top_frame, text="Текущие настройки", padding=10)
-        status_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=10)
-
-        status_names_frame = ttk.Frame(status_frame)
-        status_names_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10)
-
-        self.tolerance_name_label = ttk.Label(status_names_frame, text="Допуск:", font=(font_face, 10))
-        self.tolerance_name_label.pack(anchor=tk.E)
-        self.compress_name_label = ttk.Label(status_names_frame, text="Диапазоны:", font=(font_face, 10))
-        self.compress_name_label.pack(anchor=tk.E)
-        self.formats_count_name_label = ttk.Label(status_names_frame, text="Форматов загруженно:", font=(font_face, 10))
-        self.formats_count_name_label.pack(anchor=tk.E)
-
-        status_values_frame = ttk.Frame(status_frame)
-        status_values_frame.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=10)
-
-        self.tolerance_status_label = ttk.Label(status_values_frame, 
-                                       text="...", 
-                                       font=(font_face, 10))
-        self.tolerance_status_label.pack(anchor=tk.W)
-
-        self.compress_status_label = ttk.Label(status_values_frame, 
-                                            text="...", 
-                                            font=(font_face, 10))
-        self.compress_status_label.pack(anchor=tk.W)
-
-        self.formats_count_status_label = ttk.Label(status_values_frame, 
-                                            text="...", 
-                                            font=(font_face, 10))
-        self.formats_count_status_label.pack(anchor=tk.W)
+        top_toolbar.add_button(icon="pdf_file", command=self.on_open_file, tooltip="Открыть PDF файл")
+        top_toolbar.add_button(icon="openfolder", command=self.on_open_folder, tooltip="Открыть папку")
+        top_toolbar.add_separator()
+        top_toolbar.add_button(icon="settings", command=self.open_config_editor, tooltip="Настройки")
+        top_toolbar.add_button(icon="help", command=self.show_help_window, tooltip="Помощь")
+        top_toolbar.add_separator()
+        top_toolbar.add_button(icon="select", command=self.select_all, tooltip="Выделить всё")
+        top_toolbar.add_button(icon="copy", command=self.copy_report, tooltip="Копировать отчёт")
+        top_toolbar.add_separator()
+        top_toolbar.add_button(icon="xlsx", command=self.open_excel_report, tooltip="Excel отчет")
+        top_toolbar.add_button(icon="folder", command=self.open_reports_folder, tooltip="Папка отчетов")
+        top_toolbar.add_button(icon="save", command=self.save_report_to_file, tooltip="Сохранить текстовый отчёт")
+        # top_toolbar.add_button(icon="exit", command=root.destroy, tooltip="Выход", side_str='right')
 
         # Центральная область — вкладки
         center_frame = ttk.Frame(root)
@@ -977,16 +992,16 @@ class MainWindow:
 
         # Вкладка 1: Текстовый отчет
         report_tab = ttk.Frame(self.notebook)
-        self.notebook.add(report_tab, text="📄 Отчёт")
+        self.notebook.add(report_tab, text=" Отчёт", image=self.icons["report16"], compound="left")
+        self.report_tab = report_tab
 
         self.stats_text = tk.Text(
             report_tab,
             wrap=tk.WORD,
             font=(font_face, 10),
             bg="#f8f9fa",
-            relief="solid",
             bd=1,
-            selectbackground="#4CAF50",
+            selectbackground="#405361",
             selectforeground="white",
             padx=10,
             pady=10,
@@ -999,7 +1014,7 @@ class MainWindow:
 
         # Вкладка 2: Визуализация рулонов
         viz_tab = ttk.Frame(self.notebook)
-        self.notebook.add(viz_tab, text="📊 Загрузка рулонов")
+        self.notebook.add(viz_tab, text=" Загрузка рулонов", image=self.icons["diagram16"], compound="left")
 
         # Canvas с прокруткой для графиков
         self.viz_canvas = tk.Canvas(viz_tab, bg="#f8f9fa")
@@ -1039,33 +1054,70 @@ class MainWindow:
         )
         self.viz_placeholder.pack(expand=True)
 
+        #Статус бар
+        status_frame = ttk.Frame(root, padding=2)
+        status_frame.pack(fill=tk.X)
+        
+        self.status_label = ttk.Label(status_frame, text="Готов", font=(font_face, 10), justify=tk.LEFT, relief=tk.SUNKEN, borderwidth=1)
+        self.status_label.pack(side=tk.LEFT, padx=5, pady=5, anchor=tk.W, fill=tk.BOTH, expand=True)
+
+        self.image_label(status_frame, icon="margin16", im_padx=5)
+        self.analyzer.tolerance_var = tk.StringVar()
+        self.analyzer.tolerance_var.set("...")
+        self.tolerance_status_entry = tk.Entry(status_frame, 
+                                       textvariable=self.analyzer.tolerance_var,
+                                       font=(font_face, 10),
+                                       background="#ffffff",
+                                       width=4,
+                                       justify=tk.CENTER, 
+                                       state="readonly")
+        self.tolerance_status_entry.pack(side=tk.LEFT, anchor=tk.W, fill=tk.Y, padx=0, pady=5)        
+        self.tooltip(self.tolerance_status_entry, "Допуск распознавания форматов (мм)")
+
+        self.image_label(status_frame, icon="order16", im_padx=5)
+        self.analyzer.compress_ranges_var= tk.StringVar()
+        self.analyzer.compress_ranges_var.set("...")
+        self.compress_status_entry = tk.Entry(status_frame, 
+                                       textvariable=self.analyzer.compress_ranges_var,
+                                       font=(font_face, 10),
+                                       background="#ffffff",
+                                       width=5,
+                                       justify=tk.CENTER, 
+                                       state="readonly")
+        self.compress_status_entry.pack(side=tk.LEFT, anchor=tk.W, fill=tk.Y, padx=0, pady=5)
+        self.tooltip(self.compress_status_entry, "Сжатие диапазонов страниц")
+                
+        self.image_label(status_frame, icon="formats16", im_padx=5)
+        self.analyzer.formats_count_var = tk.StringVar()
+        self.analyzer.formats_count_var.set("...")
+        self.formats_count_status_entry = tk.Entry(status_frame, 
+                                       textvariable=self.analyzer.formats_count_var,
+                                       font=(font_face, 10),
+                                       background="#ffffff",
+                                       width=4,
+                                       justify=tk.CENTER,
+                                       state="readonly")
+        self.formats_count_status_entry.pack(side=tk.LEFT, anchor=tk.W, fill=tk.Y, padx=0, pady=5)
+        self.tooltip(self.formats_count_status_entry, "Количество распознаваемых форматов")
+
+        # Реальный прогресс-бар (determinate)
+        self.progress = ttk.Progressbar(status_frame, mode='determinate', maximum=100, length=200)
+        self.progress.pack(pady=5, side=tk.RIGHT, anchor=tk.E, padx=5)
+        self.progress_value = 0
+        self.progress_max = 0
+
         # Обновляем статус в интерфейсе (после инициализации stats_text)
         self.refresh_config()
 
-        # Нижняя панель — сервисные кнопки
-        bottom_frame = ttk.Frame(root, padding=10)
-        bottom_frame.pack(fill=tk.X)
+        if TkinterDnD is not None:
+            self.stats_text.drop_target_register("DND_Files")
+            self.stats_text.dnd_bind("<<Drop>>", self._on_drop)
+            self.stats_text.dnd_bind("<<DropEnter>>", lambda event: self._set_drop_zone_active())
+            self.stats_text.dnd_bind("<<DropLeave>>", lambda event: self._set_drop_zone_normal())
+        else:
+            self.stats_text.bind("<Enter>", lambda event: self._set_drop_zone_normal())
+            self.stats_text.bind("<Leave>", lambda event: self._set_drop_zone_normal())
 
-        ttk.Button(bottom_frame, text="Выделить всё", command=self.select_all).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(bottom_frame, text="Копировать отчёт", command=self.copy_report).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(bottom_frame, text="📊 Excel отчет", command=self.open_excel_report).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(bottom_frame, text="📁 Папка отчетов", command=self.open_reports_folder).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(bottom_frame, text="Выход", command=root.destroy).pack(side=tk.RIGHT, padx=(5, 0))
-        ttk.Button(bottom_frame, text="💾 Сохранить отчёт", command=self.save_report_to_file).pack(side=tk.RIGHT, padx=(5, 0))
-
-        #Статус бар
-        status_frame = ttk.Frame(root, padding=10)
-        status_frame.pack(fill=tk.X)
-        
-        self.status_label = tk.Label(status_frame, text="Готов", font=(font_face, 10), width=50, justify=tk.LEFT)
-        self.status_label.pack(side=tk.LEFT, pady=5, anchor="nw")
-        
-        # Реальный прогресс-бар (determinate)
-        self.progress = ttk.Progressbar(status_frame, mode='determinate', maximum=100)
-        self.progress.pack(pady=10, fill='x', side=tk.RIGHT, expand=True)
-        self.progress_value = 0
-        self.progress_max = 0
-        
         # Контекстное меню (ПКМ)
         self.context_menu = tk.Menu(self.stats_text, tearoff=0)
         self.context_menu.add_command(label="Копировать", command=self.copy_selection)
@@ -1088,6 +1140,101 @@ class MainWindow:
         self.root.bind("<Escape>", lambda e: root.destroy())
         
         self.stats_text.focus_set() # Фокус на тексовый отчет
+
+    def _set_drop_zone_normal(self):
+        try:
+            self.stats_text.configure(bg="#f8f9fa", highlightbackground="#cbd5e1", highlightthickness=0)
+        except Exception:
+            pass
+        try:
+            self.notebook.tab(self.report_tab, state="normal")
+        except Exception:
+            pass
+
+    def _set_drop_zone_active(self):
+        try:
+            self.stats_text.configure(bg="#dbeafe", highlightbackground="#A0DAB1", highlightthickness=2)
+        except Exception:
+            pass
+        try:
+            self.notebook.tab(self.report_tab, state="active")
+        except Exception:
+            pass
+
+    def _extract_drop_paths(self, raw_data) -> list[str]:
+        if raw_data is None:
+            return []
+
+        if isinstance(raw_data, (list, tuple, set)):
+            paths: list[str] = []
+            for item in raw_data:
+                paths.extend(self._extract_drop_paths(item))
+            return paths
+
+        text = str(raw_data).strip()
+        if not text:
+            return []
+
+        text = text.replace("\\n", "\n")
+        text = text.replace("}\n{", "\n").replace("}\r\n{", "\n")
+        text = text.replace("}{", "\n").replace(";", "\n")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\x00", "\n")
+
+        matches = re.findall(r"(?i)(?:[A-Za-z]:)?(?:[^\r\n;{}\[\]()\"']+?\.pdf)", text)
+        if matches:
+            return [match.strip().strip("'\"{}[]() ") for match in matches if match.strip().strip("'\"{}[]() ")]
+
+        fallback = []
+        for block in re.split(r"\n+", text):
+            block = block.strip().strip("'\"{}[]() ")
+            if block:
+                fallback.append(block)
+        return fallback
+
+    def _on_drop(self, event):
+        raw_data = getattr(event, "data", event)
+        paths = self._extract_drop_paths(raw_data)
+        if not paths:
+            return
+
+        self._set_drop_zone_active()
+        try:
+            self._run_analysis(paths)
+        finally:
+            self._set_drop_zone_normal()
+
+    def _normalize_input_paths(self, path):
+        """Нормализует входные пути из drag&drop или выбора файла/папки."""
+        if path is None:
+            return []
+
+        if isinstance(path, (list, tuple, set)):
+            items = []
+            for item in path:
+                items.extend(self._normalize_input_paths(item))
+            return items
+
+        text = str(path).strip()
+        if not text:
+            return []
+
+        text = text.replace("\\n", "\n")
+        text = text.replace("}\n{", "\n").replace("}\r\n{", "\n")
+        text = text.replace("}{", "\n").replace(";", "\n")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\x00", "\n")
+
+        matches = re.findall(r"(?i)(?:[A-Za-z]:)?(?:[^\r\n;{}\[\]()\"']+?\.pdf)", text)
+        if matches:
+            return [match.strip().strip("'\"{}[]() ") for match in matches if match.strip().strip("'\"{}[]() ")]
+
+        fallback = []
+        for block in re.split(r"\n+", text):
+            block = block.strip().strip("'\"{}[]() ")
+            if block:
+                fallback.append(block)
+        return fallback
 
     def _set_stats_text(self, text: str):
         self.stats_text.config(state=tk.NORMAL)
@@ -1136,7 +1283,7 @@ class MainWindow:
 
         colors = ['#38BDF8', '#22D3EE', '#4FD1C5', '#F97316', '#F59E0B']
 
-        wedges1, texts1, autotexts1 = ax1.pie(
+        wedges1, texts1, autotexts1 = ax1.pie( # type: ignore
             areas,
             labels=[f"{roll}\n{metrics[roll]['sheets_count']} листов" for roll in roll_names],
             autopct='%1.1f%%',
@@ -1162,7 +1309,7 @@ class MainWindow:
         ax2 = fig.add_subplot(122)
         lengths = [metrics[roll]["length_m"] for roll in roll_names]
 
-        wedges2, texts2, autotexts2 = ax2.pie(
+        wedges2, texts2, autotexts2 = ax2.pie( # type: ignore
             lengths,
             labels=[f"{roll}\n{metrics[roll]['sheets_count']} листов" for roll in roll_names],
             autopct='%1.1f%%',
@@ -1227,31 +1374,122 @@ class MainWindow:
             return
         self._run_analysis(path)
 
-    def _run_analysis(self, path: str):
-        
-        # Инициализируем прогресс-бар
+    def _run_analysis(self, path):
+        clean_paths = self._normalize_input_paths(path)
+        if not clean_paths:
+            return
+
+        pdf_files = []
+        folders = []
+        for item in clean_paths:
+            p = Path(item)
+            if p.is_dir():
+                folders.append(str(p))
+            elif p.suffix.lower() == ".pdf":
+                pdf_files.append(str(p))
+
+        if not pdf_files and not folders:
+            return
+
+        if folders:
+            recursive_pdf_files = []
+            for folder in folders:
+                recursive_pdf_files.extend(str(p) for p in Path(folder).rglob("*.pdf") if p.is_file())
+            pdf_files = list(dict.fromkeys(pdf_files + recursive_pdf_files))
+
+        if not pdf_files:
+            raise ValueError("Не выбраны корректные PDF-файлы или папка")
+
+        if len(pdf_files) == 1:
+            path = pdf_files[0]
+        else:
+            all_dfs = []
+            all_summaries = []
+            all_roll_summaries = []
+            base_name = "multi_pdf_analysis"
+            combined_start = time.time()
+            combined_files_processed = 0
+            combined_pages_processed = 0
+            combined_files_skipped = 0
+
+            folder_paths = [Path(item).resolve() for item in clean_paths if Path(item).is_dir()]
+            if folder_paths:
+                root_dir = Path(os.path.commonpath([str(p) for p in folder_paths])) if len(folder_paths) > 1 else folder_paths[0]
+            else:
+                root_dir = Path(pdf_files[0]).resolve().parent
+
+            for idx, pdf_path in enumerate(pdf_files, start=1):
+                self.progress_value = 0
+                self.progress_max = len(pdf_files)
+                self.progress['maximum'] = max(100, len(pdf_files) * 20)
+                self.progress['value'] = 0
+                self.status_label.config(text=f"Обработка PDF ({idx}/{len(pdf_files)})...")
+                self.root.update_idletasks()
+
+                try:
+                    df, summary, out_path, roll_summary = self.analyzer.process_path(
+                        pdf_path,
+                        progress_callback=self._update_progress,
+                        save_excel=False,
+                    )
+                    combined_files_processed += self.analyzer.stats.get("files_processed", 0)
+                    combined_pages_processed += self.analyzer.stats.get("pages_processed", 0)
+                    combined_files_skipped += self.analyzer.stats.get("files_skipped", 0)
+                    all_dfs.append(df)
+                    all_summaries.append(summary)
+                    all_roll_summaries.append(roll_summary)
+                except Exception as e:
+                    messagebox.showerror("Ошибка", f"Ошибка обработки файла {pdf_path}:\n{e}")
+                    return
+
+            self.analyzer.stats = {
+                "files_processed": combined_files_processed,
+                "pages_processed": combined_pages_processed,
+                "files_skipped": combined_files_skipped,
+                "errors": [],
+                "start_time": combined_start,
+                "end_time": time.time(),
+            }
+
+            combined_df = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
+            combined_summary = pd.concat(all_summaries, ignore_index=True) if all_summaries else pd.DataFrame()
+            combined_roll = pd.concat(all_roll_summaries, ignore_index=True) if all_roll_summaries else pd.DataFrame()
+
+            combined_out = root_dir / f"{base_name}_all_sizes.xlsx"
+            self.analyzer.save_excel_safe(combined_out, combined_df, combined_summary, combined_roll)
+            self.last_result = (combined_df, combined_summary, str(combined_out), combined_roll)
+            report_text = self.analyzer.build_report_text(combined_df, combined_summary, str(combined_out), combined_roll)
+            self._set_stats_text(report_text)
+            self._update_roll_visualization(combined_df, combined_roll)
+            self._save_report_auto(combined_df, combined_summary, str(combined_out), report_text, combined_roll)
+            self.progress['value'] = self.progress['maximum']
+            self.status_label.config(text="Готово!")
+            self.root.update_idletasks()
+            return
+
+        # Одиночный PDF или папка: обрабатываем как один объект, без рекурсии.
         self.progress_value = 0
         self.progress_max = 0
         self.progress['value'] = 0
-        
+
         self.status_label.config(text="Подсчёт файлов...")
         self.root.update_idletasks()
-        
-        # Подсчитываем количество PDF файлов
+
         path_obj = Path(path)
         if path_obj.is_file() and path_obj.suffix.lower() == ".pdf":
             self.progress_max = 1
         elif path_obj.is_dir():
-            pdf_count = len(list(path_obj.glob("*.pdf")))
+            pdf_count = len(list(path_obj.rglob("*.pdf")))
             self.progress_max = max(1, pdf_count)
-        
-        # Устанавливаем максимум и начинаем
-        self.progress['maximum'] = max(100, self.progress_max * 20)  # По 20% на файл
+        else:
+            raise ValueError("Не выбраны корректные PDF-файлы или папка")
+
+        self.progress['maximum'] = max(100, self.progress_max * 20)
         self.progress_value = 0
-        
+
         self.status_label.config(text="Обработка PDF...")
         self.root.update_idletasks()
-        
+
         try:
             df, summary, out_path, roll_summary = self.analyzer.process_path(
                 path,
@@ -1260,17 +1498,12 @@ class MainWindow:
             self.last_result = (df, summary, out_path, roll_summary)
             report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
-
-            # Обновляем визуализацию рулонов
             self._update_roll_visualization(df, roll_summary)
-
-            # 🆕 АВТОМАТИЧЕСКОЕ СОХРАНЕНИЕ ТЕКСТОВОГО ОТЧЁТА
-            self._save_report_auto(df, summary, out_path, report_text, roll_summary)
-
+            # Автосохранение отчёта в текстовый файл рядом с Excel-отчётом
+            # self._save_report_auto(df, summary, out_path, report_text, roll_summary)
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
-            
-        # Завершаем прогресс
+
         self.progress['value'] = self.progress['maximum']
         self.status_label.config(text="Готово!")
         self.root.update_idletasks()
@@ -1303,7 +1536,7 @@ class MainWindow:
         """Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller"""
         try:
             # PyInstaller создаёт временную папку _MEIPASS
-            base_path = sys._MEIPASS
+            base_path = sys._MEIPASS # type: ignore
         except Exception:
             base_path = os.path.abspath(".")
         
@@ -1312,62 +1545,224 @@ class MainWindow:
     def show_help_window(self):
         win = tk.Toplevel(self.root)
         win.title("Помощь")
-        win.geometry("500x450")
+        win.geometry("550x650") # ширина x высота
+        win.minsize(550, 650)
+        win.configure(bg="#eef3f9")
 
-        instr_frame = ttk.LabelFrame(win, text="Инструкция", padding="10")
-        instr_frame.pack(fill=tk.X, anchor="nw", expand=True, padx=5, pady=5)       
+        header = tk.Frame(win, bg="#405361", padx=5, pady=12)
+        header.pack(fill=tk.X, padx=0, pady=0)
 
-        instructions = (
-            "\n"
-            " 1. Нажмите «Открыть файл» для анализа одного PDF.\n"
-            " 2. Нажмите «Открыть папку» для анализа всех PDF в выбранной папке.\n"
-            " 3. После обработки создаётся Excel-файл с листами:\n"
-            "   - «Все страницы» — детальная информация по страницам\n"
-            "   - «Сводка ЕСКД» — сводка по форматам и цветности\n"
-            "   - «Сводка по рулонам» — сводка по распределению страниц по рулонам\n"
-            "   Также создаётся текстовый файл с отчетом.\n"        
-            " 4. Форматы распознаются по ГОСТ 2.301-68 (A0, A1, A4×3 и т.д.)\n"
-            " 5. В основном окне отображается текстовый отчёт — его можно частично или полностью выделить и скопировать.\n"
-            " 6. Параметры допуска и список стандартных форматов задаются в файле config.yaml.\n"
-            " 7. Программу можно запускать с параметром пути (файл/папка) через командную строку — в этом случае сразу выполняется обработка и открывается окно с отчётом.\n"
-            "\n"
-            "Инструмент разработан для Отдела выпуска компании СП-Инновация\n"
-            "Версия программы: "+version+
-            "\nАвтор: Родионов Вадим\n"
+        logoframe = tk.Frame(header, bg="#405361", padx=0, pady=0)
+        logoframe.pack(side=tk.TOP, padx=0, pady=0, fill=tk.X)
+        
+        logo_image = tk.Label(logoframe, image=self.icons["icon48"], bg="#405361")
+        logo_image.pack(side=tk.LEFT, anchor=tk.W, padx=0, pady=0)
+
+        header_title = tk.Label(
+            logoframe,
+            text="Анализатор страниц PDF-документов \nPDF Page Analyzer",
+            fg="#f8fafc",
+            bg="#405361",
+            font=(font_face, 18, "bold"),
+            justify=tk.LEFT
         )
- 
-        instr_text = tk.Label(instr_frame, font=(font_face, 10), text=instructions, justify="left", wraplength=450 )
-        instr_text.pack(side=tk.LEFT, anchor="nw", expand=True, padx=10, ipadx=0)    
-               
-        # Группа для лототипа
-        Logo_frame = ttk.Frame(win)
-        Logo_frame.pack(fill=tk.BOTH, pady=5, expand=True)
+        header_title.pack(anchor=tk.W, side=tk.LEFT, padx=(10, 0), pady=(0, 0))
 
-        def open_link():
-            webbrowser.open("https://github.com/shadowdfd/PDF-pages-analizer")
-       
-        Gitbutton = ttk.Button(Logo_frame, text="Посетить GitHub", command=open_link)
-        Gitbutton.pack(side=tk.LEFT, padx=(20,0), pady=5)
+        header_subtitle = tk.Label(
+            header,
+            text="Анализ форматов, размеров и цветности PDF",
+            fg="#cbd5e1",
+            bg="#405361",
+            font=(font_face, 10)
+        )
+        header_subtitle.pack(side=tk.TOP, anchor=tk.W, pady=(4, 0))
 
-        # ЛОГОТИП - ПРАВЫЙ НИЖНИЙ УГОЛ (работает в EXE)
+        main = tk.Frame(win, bg="#ffffff", padx=5, pady=5)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        info_frame = ttk.Frame(main, padding=(0, 0))
+        info_frame.pack(fill=tk.X, pady=(0, 10), expand=True)
+
+        about_heading = tk.Label(
+            info_frame,
+            text="О программе",
+            justify=tk.LEFT,
+            anchor="w",
+            fg="#405361",
+            bg="#ffffff",
+            font=(font_face, 12, "bold"),
+            wraplength=540
+        )
+        about_heading.pack(fill=tk.X, pady=(0, 0))
+
+        info_text = (
+            "Главная цель — быстро определить размеры, форматы и цветность страниц PDF,\n"
+            "а затем сформировать сводку и Excel-отчёт для дальнейшей обработки."
+            "\n"
+            "Инструмент разработан для отдела выпуска компании СП-Инновация.\n"
+            "\n"            
+            f"Версия программы: {version}\n"
+            "Автор: Родионов Вадим"
+        )
+
+        info_label = tk.Label(
+            info_frame,
+            text=info_text,
+            justify=tk.LEFT,
+            anchor="w",
+            font=(font_face, 10),
+            bg="#ffffff",
+            fg="#0f172a",
+            padx=14,
+            pady=0, 
+            wraplength=540
+        )
+        info_label.pack(fill=tk.X)
+
+        icon_hyperlink_label = tk.Label(
+            info_frame,
+            text="Иконки взяты с сайта flaticon.com автора Magnific",
+            justify=tk.LEFT,
+            anchor="w",
+            font=(font_face, 10, "underline"),
+            bg="#ffffff",
+            fg="#0f172a",
+            padx=14,
+            pady=0,
+            wraplength=540,
+            cursor="hand2"
+        )
+        icon_hyperlink_label.pack(fill=tk.X)
+        icon_hyperlink_label.bind("<Button-1>", lambda e: webbrowser.open("https://www.flaticon.com/ru/authors/magnific"))
+
+        steps_frame = ttk.Frame(main, padding=(0, 0))
+        steps_frame.pack(fill=tk.X, expand=True)
+
+        steps_heading = tk.Label(
+            steps_frame,
+            text="Как работать",
+            justify=tk.LEFT,
+            anchor="w",
+            fg="#405361",
+            bg="#ffffff",
+            font=(font_face, 12, "bold"),
+            wraplength=540
+        )
+        steps_heading.pack(fill=tk.X, pady=(0, 0))
+
+        steps = (
+            "1. Откройте файлы PDF для анализа одним из способов:\n"
+            "       а. Нажмите «Открыть файл» для анализа одного PDF.\n"
+            "       б. Нажмите «Открыть папку» для анализа всех PDF в выбранной папке\n"
+            "           включая вложенные подпапки.\n"
+            "       в. Забосьте файлы или папки прямо в окно программы.\n"
+            "2. После обработки программа создаёт Excel-файл с листами: «Все страницы»,\n"
+            "   «Сводка ЕСКД» и «Сводка по рулонам».\n"
+            "3. Форматы распознаются по ГОСТ 2.301-68 (A0, A1, A4×3 и т.д.).\n"
+            "   А также по собственным стандартам, настроенными в настройках.\n"
+            "4. В основном окне отображается текстовый отчёт; его можно выделить и скопировать.\n"
+            "5. Параметры допуска и список стандартных форматов задаются в настройках,\n"
+            "   а также могут быть заданы в config.yaml (текстовый файл).\n"
+            "6. При запуске с параметром пути (файл или папка) обработка выполняется сразу\n"
+            "   (режим CLI).\n"
+        )
+
+        steps_label = tk.Label(
+            steps_frame,
+            text=steps,
+            justify=tk.LEFT,
+            anchor="w",
+            font=(font_face, 10),
+            bg="#ffffff",
+            fg="#1f2937",
+            padx=14,
+            pady=0,
+            wraplength=540
+        )
+        steps_label.pack(fill=tk.BOTH, expand=True)
+
+        footer = tk.Frame(win, bg="#BFCDD2", padx=18, pady=10)
+        footer.pack(fill=tk.X)
+
+        github_btn = tk.Button(
+            footer,
+            text="Посетить GitHub",
+            command=lambda: webbrowser.open("https://github.com/shadowdfd/PDF-pages-analizer"),
+            bg="#405361",
+            fg="#ffffff",
+            activebackground="#1d4f7c",
+            activeforeground="#ffffff",
+            relief=tk.RAISED,
+            padx=9,
+            pady=9,
+            bd=1,
+            highlightbackground="#0c2942",
+            highlightthickness=1,
+            cursor="hand2",
+            font=(font_face, 10, "bold")
+        )
+        github_btn.pack(side=tk.LEFT, padx=(0, 10))
+
+        close_btn = tk.Button(
+            footer,
+            text="Закрыть",
+            command=win.destroy,
+            bg="#f1f5f9",
+            fg="#0f172a",
+            activebackground="#dfe7f0",
+            activeforeground="#0f172a",
+            relief=tk.RAISED,
+            padx=9,
+            pady=9,
+            bd=1,
+            highlightbackground="#94a3b8",
+            highlightthickness=1,
+            cursor="hand2",
+            font=(font_face, 10, "bold")
+        )
+        close_btn.pack(side=tk.RIGHT)
+
         try:
             from PIL import Image, ImageTk
-            
+
             logo_path = self.resource_path("img/logo.png")
             img = Image.open(logo_path)
             logo_img = ImageTk.PhotoImage(img)
-            
-            logo_label = tk.Label(Logo_frame, image=logo_img, borderwidth=0)
-            logo_label.image = logo_img
-            logo_label.pack(anchor="ne", padx=5, pady=5)
-            #logo_label.place(relx=1.0, rely=0.02, anchor="ne", x=-5, y=5)
-            
+
+            logo_container = tk.Frame(
+                footer,
+                bg="#BFCDD2",
+                bd=0,
+                relief=tk.SOLID,
+                padx=6,
+                pady=6
+            )
+            logo_container.pack(side=tk.RIGHT, padx=(10, 10))
+
+            logo_label = tk.Label(
+                logo_container,
+                image=logo_img,
+                borderwidth=0,
+                bg="#BFCDD2"
+            )
+            logo_label.pack(padx=5, pady=0)
         except (ImportError, FileNotFoundError):
-            # Текстовый логотип как fallback
-            logo_label = tk.Label(Logo_frame, text="🏢 СП-Инновация", 
-                                 font=(font_face, 14, "bold"), fg="#2E86AB")
-            logo_label.pack(anchor="ne", padx=5, pady=5)
-            #logo_label.place(relx=1.0, rely=0.02, anchor="se", x=-5, y=5)
+            logo_label = tk.Label(
+                footer,
+                text="🏢 СП-Инновация",
+                font=(font_face, 12, "bold"),
+                fg="#BFCDD2",
+                bg="#405361",
+                padx=10,
+                pady=7,
+                bd=1,
+                relief=tk.SOLID
+            )
+            logo_label.pack(side=tk.RIGHT, padx=(10, 0))
+
+        win.transient(self.root)
+        win.grab_set()
+        win.wait_window()
 
     def open_config_editor(self):
         """Открывает редактор конфигурации"""
@@ -1385,36 +1780,35 @@ class MainWindow:
         self.stats_text.config(state=tk.NORMAL)
         self.stats_text.tag_add("sel", "1.0", "end")
         self.stats_text.config(state=tk.DISABLED)
-
+        self.stats_text.focus_set()
+        self.status_label.config(text=f"Всё выделено ({len(self.stats_text.get('1.0', 'end').strip())} симв.)")
+        
     def copy_selection(self):
         """Копирует выделенный текст или весь текст, если ничего не выделено"""
         try:
             # Пытаемся скопировать выделенный текст
             text = self.stats_text.get(tk.SEL_FIRST, tk.SEL_LAST)
         except tk.TclError:
-            # Если ничего не выделено - копируем всё (с подтверждением)
-            response = messagebox.askyesno("Копирование", "Текст не выделен.\n\nКопировать весь текст?")
-            if response:
-                text = self.stats_text.get("1.0", tk.END).strip()
-            else:
-                return
-        
+            # Если ничего не выделено - копируем всё
+            text = self.stats_text.get("1.0", tk.END).strip()
+                
         if text:
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
-            print(f"📋 Скопировано {len(text)} символов")
+            self.status_label.config(text=f"Скопировано {len(text)} символов")
         else:
-            messagebox.showwarning("Отчёт пуст", "Нет текста для копирования")
+            self.status_label.config(text="Нет текста для копирования")
 
     def copy_report(self):
         """Копирует весь текст отчёта"""
         text = self.stats_text.get("1.0", tk.END).strip()
         if not text:
-            messagebox.showwarning("Отчёт пуст", "Нечего копировать")
+            self.status_label.config(text="Нет текста для копирования")
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        messagebox.showinfo("Копирование", "Текст отчёта скопирован в буфер обмена.")
+        self.status_label.config(text=f"Отчет скопирован. {len(text)} символов")
+
 
     def save_report_to_file(self):
         """Сохраняет текущий текст отчёта в файл рядом с XLSX"""
@@ -1549,31 +1943,15 @@ class MainWindow:
         try:
             # Статус допуска
             tolerance_status = self.config.get('tolerance_mm', 5.0)
-            tolerance_label = getattr(self, 'tolerance_status_label', None)
-            if tolerance_label:
-                tolerance_label.config(
-                    text=f"{tolerance_status} мм",
-                    foreground="green"
-                )
+            self.analyzer.tolerance_var.set(f"{tolerance_status}")
             
             # Статус сжатия диапазонов
             compress_status = self.config.get('compress_ranges', True)
+            self.analyzer.compress_ranges_var.set(f"{'Вкл' if compress_status else 'Выкл'}")
 
-            compress_label = getattr(self, 'compress_status_label', None)
-            if compress_label:
-                compress_label.config(
-                    text=f"{'Сжатие ВКЛ' if compress_status else 'По отдельности'}",
-                    foreground="green" if compress_status else "orange"
-                )
-            
             # Статус количества форматов
             formats_count_status = len(self.config.get('formats', {}))
-            formats_count_label = getattr(self, 'formats_count_status_label', None)
-            if formats_count_label:
-                formats_count_label.config(
-                    text=f"{formats_count_status}",
-                    foreground="green"
-                )
+            self.analyzer.formats_count_var.set(f"{formats_count_status}")
 
         except Exception as e:
             print(f"⚠️ Ошибка обновления статуса: {e}")
@@ -1627,3 +2005,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 
