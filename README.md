@@ -1,4 +1,4 @@
-# PDF Page Analyzer 📄
+# Анализатор страниц PDF-документов / PDF Page Analyzer 📄
 
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow)
@@ -7,7 +7,7 @@
 
 Автоматический анализ PDF документов для подбора принтера и планирования печати. 
 
-Позволяет работать как с одним файлом, так и целой папкой.
+Позволяет работать как с одним файлом, так и целой папкой, включая вложенные.
 
 Позволяет определить:
 
@@ -18,6 +18,8 @@
 ✅ Количество и перечень страниц по файлам и папкам в разрезе форматов и печатных носителей
 
 ✅ Полный список страниц
+
+✅ Распределение плоттерных форматов по рулонам
 
 Идеально для планирования печати по файлам! 📁📐✅ 
 
@@ -62,6 +64,7 @@ pip install -r requirements.txt
 ```text
 tolerance_mm: 5.0  # Допуск распознавания ±5мм
 compress_ranges: 1  # Сжимать диапазоны 1-да, 0-нет.
+pt_to_mm: 0.3528 # Коэф перевода Pt в ММ
 formats:
   A4: [210, 297]
   A3: [297, 420]
@@ -86,21 +89,25 @@ python pdfpages_pro.py "C:\PDFs"
 
 ✅ project_all_sizes.xlsx (рядом с файлом)
 
-✅ project_all_sizes_report.txt (рядом с файлом)
+✅ project_all_sizes_report.txt (рядом с файлом по запросу)
 
-✅ GUI-отчёт (статистика + копирование)
+✅ GUI-отчёт (статистика + копирование) 
 
 #### 📁 Структура проекта
 
 ```text
 📁 pdfpages_pro/
-├── pdfpages_pro.py     # Основной скрипт ⭐
-├── config_editor.py     # Редактор конфига
-├── defaults.py         # Конфиг по умолчанию
-├── config.yaml         # Конфиг / Настройки форматов
-├── logo.png           # Логотип (опционально)
-├── icon.png           # Иконка приложения
+├── 📁 img/            # изображения
+|    ├── logo.png      # Логотип (опционально)
+|    ├── icon.png      # Иконка приложения
+|    └── прочие...     # Прочие изображения
+├── pdfpages_pro.py    # Основной скрипт ⭐
+├── config_editor.py   # Редактор конфига
+├── defaults.py        # Конфиг по умолчанию
+├── setting.py         # Глобальные настройки
+├── config.yaml        # Конфиг / Настройки форматов
 ├── README.md          # Этот файл
+├── CHANGELOG.md       # История изменений
 └── requirements.txt   # Зависимости
 ```
 
@@ -129,12 +136,11 @@ python pdfpages_pro.py "C:\PDFs"
 Собрать свою версию из исходников:
 
 ```bash
-pyinstaller  --name=pdfpages_pro ^
+pyinstaller --name=pdfpages_pro ^
             --onedir ^
             --windowed ^
-            --add-data "logo.png;." ^
-            --add-data "icon.png;." ^
-            --icon "paper-size.ico" ^
+            --add-data "img;img" ^
+            --icon "img/paper-size.ico" ^
             --version-file=file_version_info.txt ^
             pdfpages_pro.py
 ```
@@ -172,6 +178,12 @@ tolerance_mm: 5.0  # прогрешность ±5мм
 compress_ranges: 1  # 1-да, 0-нет.
 ```
 
+- Кофф перевода Pt в мм
+
+```text
+pt_to_mm: 0.3528
+```
+
 - Новые форматы
 
 ```text
@@ -184,19 +196,17 @@ formats:
 
 ![GUI Report](screenshots/gui_report.png) 
 
+![](C:\Users\Rodionov\Yandex.Disk\ПРОЕКТЫ\_ПРОГРАММНЫЕ%20РАЗРАБОТКИ\PDF_Список%20листов\screenshots\gui_setting1.png)
+
+![](C:\Users\Rodionov\Yandex.Disk\ПРОЕКТЫ\_ПРОГРАММНЫЕ%20РАЗРАБОТКИ\PDF_Список%20листов\screenshots\gui_setting2.png)
+
 ![Excel Report](screenshots/excel_output.png) 
-
-## Возможные проблемы
-
-| Проблема                | Решение                               |
-| ----------------------- | ------------------------------------- |
-| PermissionError         | Закройте Excel-файл                   |
-| Логотип не виден        | pip install Pillow, положите logo.png |
-| Форматы не распознаются | Увеличьте tolerance_mm в config.yaml  |
 
 ## 📄 Лицензия
 
 MIT License — используйте свободно в коммерческих проектах!
+
+Иконки https://www.flaticon.com/ru/authors/magnific
 
 ## 🤝 Контакты
 
