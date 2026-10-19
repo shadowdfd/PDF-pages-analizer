@@ -1114,8 +1114,12 @@ class MainWindow:
             self.stats_text.dnd_bind("<<Drop>>", self._on_drop)
             self.stats_text.dnd_bind("<<DropEnter>>", lambda event: self._set_drop_zone_active())
             self.stats_text.dnd_bind("<<DropLeave>>", lambda event: self._set_drop_zone_normal())
+            print("✅ Drag & Drop активен")
         else:
-            self.stats_text.bind("<Enter>", lambda event: self._set_drop_zone_normal())
+            print("⚠️ Drag & Drop недоступен (tkinterdnd2 не установлен)")
+            print("   Установите: pip install tkinterdnd2")
+            # Fallback для визуальной индикации при наведении мыши
+            self.stats_text.bind("<Enter>", lambda event: self._set_drop_zone_active())
             self.stats_text.bind("<Leave>", lambda event: self._set_drop_zone_normal())
 
         # Контекстное меню (ПКМ)
@@ -1201,6 +1205,10 @@ class MainWindow:
         self._set_drop_zone_active()
         try:
             self._run_analysis(paths)
+        except ValueError as e:
+            messagebox.showwarning("Предупреждение", str(e))
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
         finally:
             self._set_drop_zone_normal()
 
@@ -1782,7 +1790,7 @@ class MainWindow:
         self.stats_text.config(state=tk.DISABLED)
         self.stats_text.focus_set()
         self.status_label.config(text=f"Всё выделено ({len(self.stats_text.get('1.0', 'end').strip())} симв.)")
-        
+
     def copy_selection(self):
         """Копирует выделенный текст или весь текст, если ничего не выделено"""
         try:
