@@ -196,9 +196,9 @@ formats:
 
 ![GUI Report](screenshots/gui_report.png) 
 
-![](C:\Users\Rodionov\Yandex.Disk\ПРОЕКТЫ\_ПРОГРАММНЫЕ%20РАЗРАБОТКИ\PDF_Список%20листов\screenshots\gui_setting1.png)
+![Настройки_1](screenshots/gui_setting1.png)
 
-![](C:\Users\Rodionov\Yandex.Disk\ПРОЕКТЫ\_ПРОГРАММНЫЕ%20РАЗРАБОТКИ\PDF_Список%20листов\screenshots\gui_setting2.png)
+![Настройки 2](screenshots/gui_setting2.png)
 
 ![Excel Report](screenshots/excel_output.png) 
 
