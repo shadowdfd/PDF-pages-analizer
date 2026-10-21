@@ -1142,7 +1142,7 @@ class MainWindow:
         # Горячие клавиши на root (общие для приложения)
         self.root.bind("<Control-s>", lambda e: self.save_report_to_file())
         self.root.bind("<Escape>", lambda e: root.destroy())
-        
+
         self.stats_text.focus_set() # Фокус на тексовый отчет
 
     def _set_drop_zone_normal(self):
@@ -1673,6 +1673,7 @@ class MainWindow:
             "   а также могут быть заданы в config.yaml (текстовый файл).\n"
             "6. При запуске с параметром пути (файл или папка) обработка выполняется сразу\n"
             "   (режим CLI).\n"
+            "7. Если станет скучно то попробуй вспомнить чит-коды из DOOM"
         )
 
         steps_label = tk.Label(
@@ -1768,6 +1769,34 @@ class MainWindow:
             )
             logo_label.pack(side=tk.RIGHT, padx=(10, 0))
 
+        # 🎮 Пасхалка: отслеживание ввода чит-кодов
+        cheat_buffer = []
+
+        # Чит-коды: код -> действие
+        cheat_codes = {
+            'iddqd': 'snake',        # God mode в DOOM -> Змейка
+            'idkfa': 'tetris',       # Всё оружие в DOOM -> Тетрис
+            'idclip': 'arkanoid',    # Проход сквозь стены в DOOM -> Арканоид
+            'idspispopd': 'galaga',  # Проход сквозь стены (старый) в DOOM -> Galaga
+        }
+
+        def on_key_press(event):
+            # Добавляем символ в буфер
+            if event.char.lower() in 'idkfaqlcpso':
+                cheat_buffer.append(event.char.lower())
+                # Оставляем только последние 10 символов (макс. длина кода)
+                if len(cheat_buffer) > 10:
+                    cheat_buffer.pop(0)
+
+                # Проверяем все коды
+                buffer_str = ''.join(cheat_buffer)
+                for code, game_type in cheat_codes.items():
+                    if buffer_str.endswith(code):
+                        win.destroy()
+                        self._launch_easter_egg(game_type)
+                        break
+
+        win.bind("<Key>", on_key_press)
         win.transient(self.root)
         win.grab_set()
         win.wait_window()
@@ -1982,6 +2011,32 @@ class MainWindow:
 
         # Обновляем визуализацию
         self._update_roll_visualization(df, roll_summary)
+
+    # ---------- пасхалка ----------
+
+    def _launch_easter_egg(self, game_type='snake'):
+        """Запускает пасхалку - мини-игры
+
+        Args:
+            game_type: тип игры ('snake', 'tetris', 'arkanoid' или 'galaga')
+        """
+        try:
+            if game_type == 'snake':
+                from snake_game import launch_snake_game
+                launch_snake_game(parent=self.root)
+            elif game_type == 'tetris':
+                from tetris_game import launch_tetris_game
+                launch_tetris_game(parent=self.root)
+            elif game_type == 'arkanoid':
+                from arkanoid_game import launch_arkanoid_game
+                launch_arkanoid_game(parent=self.root)
+            elif game_type == 'galaga':
+                from galaga_game import launch_galaga_game
+                launch_galaga_game(parent=self.root)
+        except ImportError as e:
+            messagebox.showerror("Ошибка", f"Не найден модуль игры:\n{str(e)}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось запустить игру:\n{str(e)}")
 
     # ---------- запуск ----------
 
