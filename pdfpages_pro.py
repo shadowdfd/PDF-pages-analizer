@@ -564,8 +564,8 @@ class PDFAnalyzer:
         summary_data = []
         for (format_name, std_size, file_name), group in df.groupby(["Стандартный формат", "Размер стандарта", "Файл"]):
             pages_list_bw = get_page_list(group, "Ч/Б")
-            pages_list_col = get_page_list(group, "Цветная")           
-            
+            pages_list_col = get_page_list(group, "Цветная")
+
             if self.compress_ranges_y:
                 if pages_list_bw != "-": pages_list_bw = self.compress_ranges(pages_list_bw)
                 if pages_list_col != "-": pages_list_col = self.compress_ranges(pages_list_col)
@@ -580,6 +580,28 @@ class PDFAnalyzer:
                 "Цветных": (group["Цветность"] == "Цветная").sum(),
                 "Ч/Б": (group["Цветность"] == "Ч/Б").sum(),
             })
+
+        # Добавляем строку для объединенных форматов A4+A3 по каждому файлу
+        for file_name, file_group in df.groupby("Файл"):
+            a4a3_group = file_group[file_group["Стандартный формат"].isin(["A4", "A3"])]
+            if not a4a3_group.empty:
+                pages_list_bw = get_page_list(a4a3_group, "Ч/Б")
+                pages_list_col = get_page_list(a4a3_group, "Цветная")
+
+                if self.compress_ranges_y:
+                    if pages_list_bw != "-": pages_list_bw = self.compress_ranges(pages_list_bw)
+                    if pages_list_col != "-": pages_list_col = self.compress_ranges(pages_list_col)
+
+                summary_data.append({
+                    "Файл": file_name,
+                    "Стандартный формат": "A4 + A3",
+                    "Количество": len(a4a3_group),
+                    "Размер стандарта": "-",
+                    "Ч/Б страницы": pages_list_bw,
+                    "Цветные страницы": pages_list_col,
+                    "Цветных": (a4a3_group["Цветность"] == "Цветная").sum(),
+                    "Ч/Б": (a4a3_group["Цветность"] == "Ч/Б").sum(),
+                })
 
         summary = pd.DataFrame(summary_data).sort_values(["Файл", "Стандартный формат"]).reset_index(drop=True)
 
