@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import hashlib
 from typing import Dict, Any
 import subprocess
 import platform
@@ -25,6 +26,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from defaults import DEFAULT_CONFIG, DEFAULT_SETTINGS, DEFAULT_FORMATS
+from treeview_tab import TreeviewTab
 
 pt_to_mm = setting.pt_to_mm
 font_face = setting.font_face
@@ -183,7 +185,9 @@ class PDFAnalyzer:
                     if pix is not None:
                         del pix
             for draw in page.get_drawings():
-                for col in (draw.get("fill"), draw.get("stroke")):
+                # PyMuPDF exposes the outline color as "color" (not "stroke").
+                # Keep "stroke" as a fallback for compatible drawing objects.
+                for col in (draw.get("fill"), draw.get("color", draw.get("stroke"))):
                     if col and len(col) >= 3:
                         r, g, b = col[:3]
                         if not (abs(r - g) < 1e-3 and abs(g - b) < 1e-3):
@@ -328,7 +332,7 @@ class PDFAnalyzer:
 
             roll_summary_data.append({
                 "Файл": file_name,
-                "Формат рулона": f"🧻 Рулон {roll_format}",
+                "Формат рулона": f"Рулон {roll_format}",
                 "Стандартный формат": "ИТОГО",
                 "Размер стандарта": "-",
                 "Количество": len(file_roll_group),
@@ -345,7 +349,7 @@ class PDFAnalyzer:
 
                 roll_summary_data.append({
                     "Файл": file_name,
-                    "Формат рулона": roll_format,
+                    "Формат рулона": f"Рулон {roll_format}",  # Полное название, как в ИТОГО
                     "Стандартный формат": std_format,
                     "Размер стандарта": group["Размер стандарта"].iloc[0],
                     "Количество": len(group),
@@ -418,6 +422,11 @@ class PDFAnalyzer:
                     # Автоподбор ширины столбцов для всех листов
                     for sheet_name in writer.sheets:
                         worksheet = writer.sheets[sheet_name]
+                        # Включаем выпадающий фильтр в заголовке каждой колонки.
+                        # Диапазон ограничен фактически заполненной таблицей.
+                        if worksheet.max_row >= 1 and worksheet.max_column >= 1:
+                            worksheet.auto_filter.ref = worksheet.dimensions
+
                         for column in worksheet.columns:
                             max_length = 0
                             column_letter = column[0].column_letter
@@ -753,7 +762,7 @@ class PDFAnalyzer:
                     else:
                         pages_for_roll_str = ",".join(map(str, all_pages_for_roll)) if all_pages_for_roll else "-"
 
-                    lines.append(f"        🧻 Рулон {roll_fmt}: {total_in_roll} стр.: {pages_for_roll_str}")
+                    lines.append(f"        🧻 {roll_fmt}: {total_in_roll} стр.: {pages_for_roll_str}")
 
                     for _, row in roll_group.iterrows():
                         fmt = row["Стандартный формат"]
@@ -903,6 +912,10 @@ class MainWindow:
        
         self.root.title("Анализатор PDF файлов "+version)
         self.root.geometry("900x650")
+        self.root.update_idletasks()
+        x = max(0, (self.root.winfo_screenwidth() - self.root.winfo_width()) // 2)
+        y = max(0, (self.root.winfo_screenheight() - self.root.winfo_height()) // 2)
+        self.root.geometry(f"+{x}+{y}")
         self.root.resizable(True, True)
 
         # Иконки
@@ -918,6 +931,7 @@ class MainWindow:
             report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
             self._update_roll_visualization(df, roll_summary)
+            self.treeview_tab.update_data(df=df, summary=summary, roll_summary=roll_summary)  # Обновляем древовидную вкладку
         else:
             self._set_stats_text("Выберите файл или папку для анализа PDF документов.")
 
@@ -926,6 +940,7 @@ class MainWindow:
     def load_icons(self):
         icon_names = [
             "pdf_file", "folder", "settings", "help", "copy", "save", "order", "cur_settings", "formats16", "margin16", "order16", "icon", "icon48",
+            "pdf_file16", "plotter16", "roll16", "sheet16", "laser16", "bw16", "color16",
             "openfolder", "formats", "margin","select","txt_report","exit", "xlsx", "diagram", "report", "diagram16", "report16", "text-file"
         ]
         self.icons = {
@@ -993,11 +1008,21 @@ class MainWindow:
         top_toolbar.add_button(icon="pdf_file", command=self.on_open_file, tooltip="Открыть PDF файл")
         top_toolbar.add_button(icon="openfolder", command=self.on_open_folder, tooltip="Открыть папку")
         top_toolbar.add_separator()
-        top_toolbar.add_button(icon="settings", command=self.open_config_editor, tooltip="Настройки")
-        top_toolbar.add_button(icon="help", command=self.show_help_window, tooltip="Помощь")
-        top_toolbar.add_separator()
-        top_toolbar.add_button(icon="select", command=self.select_all, tooltip="Выделить всё")
-        top_toolbar.add_button(icon="copy", command=self.copy_report, tooltip="Копировать отчёт")
+        top_toolbar.add_button(icon="help", command=self.show_help_window, tooltip="Помощь <F1>", side_str='right')
+        top_toolbar.add_button(icon="settings", command=self.open_config_editor, tooltip="Настройки", side_str='right')
+       
+        self.select_all_button = top_toolbar.add_button(
+            icon="select",
+            command=self.select_all,
+            tooltip="Выделить всё",
+            state="disabled",
+        )
+        self.copy_report_button = top_toolbar.add_button(
+            icon="copy",
+            command=self.copy_report,
+            tooltip="Копировать отчёт",
+            state="disabled",
+        )
         top_toolbar.add_separator()
         top_toolbar.add_button(icon="xlsx", command=self.open_excel_report, tooltip="Excel отчет")
         top_toolbar.add_button(icon="folder", command=self.open_reports_folder, tooltip="Папка отчетов")
@@ -1012,10 +1037,19 @@ class MainWindow:
         self.notebook = ttk.Notebook(center_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Вкладка 1: Текстовый отчет
+        # Вкладка 1: Сводка по форматам (древовидная таблица)
+        self.treeview_tab = TreeviewTab(self.notebook, font_face=font_face, app=self)
+        self.notebook.add(self.treeview_tab.frame, text=" Сводка по форматам", image=self.icons["report16"], compound="left")
+
+        # Вкладка 2: Визуализация рулонов
+        viz_tab = ttk.Frame(self.notebook)
+        self.notebook.add(viz_tab, text=" Загрузка рулонов", image=self.icons["diagram16"], compound="left")
+
+        # Вкладка 3: Текстовый отчет
         report_tab = ttk.Frame(self.notebook)
         self.notebook.add(report_tab, text=" Отчёт", image=self.icons["report16"], compound="left")
         self.report_tab = report_tab
+        self.notebook.bind("<<NotebookTabChanged>>", self._update_report_toolbar_state)
 
         self.stats_text = tk.Text(
             report_tab,
@@ -1033,10 +1067,7 @@ class MainWindow:
         self.stats_text.configure(yscrollcommand=scroll_report.set)
         scroll_report.pack(side=tk.RIGHT, fill=tk.Y)
         self.stats_text.pack(fill=tk.BOTH, expand=True)
-
-        # Вкладка 2: Визуализация рулонов
-        viz_tab = ttk.Frame(self.notebook)
-        self.notebook.add(viz_tab, text=" Загрузка рулонов", image=self.icons["diagram16"], compound="left")
+        self._update_report_toolbar_state()
 
         # Canvas с прокруткой для графиков
         self.viz_canvas = tk.Canvas(viz_tab, bg="#f8f9fa")
@@ -1136,6 +1167,12 @@ class MainWindow:
             self.stats_text.dnd_bind("<<Drop>>", self._on_drop)
             self.stats_text.dnd_bind("<<DropEnter>>", lambda event: self._set_drop_zone_active())
             self.stats_text.dnd_bind("<<DropLeave>>", lambda event: self._set_drop_zone_normal())
+            # Приём PDF также непосредственно на вкладке сводки и её Treeview.
+            for target in (self.treeview_tab.frame, self.treeview_tab.tree):
+                target.drop_target_register("DND_Files")
+                target.dnd_bind("<<Drop>>", self._on_drop)
+                target.dnd_bind("<<DropEnter>>", lambda event: self._set_drop_zone_active())
+                target.dnd_bind("<<DropLeave>>", lambda event: self._set_drop_zone_normal())
             print("✅ Drag & Drop активен")
         else:
             print("⚠️ Drag & Drop недоступен (tkinterdnd2 не установлен)")
@@ -1164,12 +1201,27 @@ class MainWindow:
         # Горячие клавиши на root (общие для приложения)
         self.root.bind("<Control-s>", lambda e: self.save_report_to_file())
         self.root.bind("<Escape>", lambda e: root.destroy())
+        self.root.bind("<F1>", lambda e: self.show_help_window())
 
         self.stats_text.focus_set() # Фокус на тексовый отчет
+
+    def _update_report_toolbar_state(self, event=None):
+        """Включает кнопки работы с текстом только на вкладке отчёта."""
+        if not hasattr(self, "notebook") or not hasattr(self, "report_tab"):
+            return
+
+        report_active = self.notebook.select() == str(self.report_tab)
+        state = "normal" if report_active else "disabled"
+        self.select_all_button.configure(state=state)
+        self.copy_report_button.configure(state=state)
 
     def _set_drop_zone_normal(self):
         try:
             self.stats_text.configure(bg="#f8f9fa", highlightbackground="#cbd5e1", highlightthickness=0)
+        except Exception:
+            pass
+        try:
+            self.treeview_tab.tree.configure(style="Treeview")
         except Exception:
             pass
         try:
@@ -1180,6 +1232,13 @@ class MainWindow:
     def _set_drop_zone_active(self):
         try:
             self.stats_text.configure(bg="#dbeafe", highlightbackground="#A0DAB1", highlightthickness=2)
+        except Exception:
+            pass
+        try:
+            style_name = "DropZone.Treeview"
+            style = ttk.Style(self.root)
+            style.configure(style_name, background="#dbeafe")
+            self.treeview_tab.tree.configure(style=style_name)
         except Exception:
             pass
         try:
@@ -1313,9 +1372,13 @@ class MainWindow:
 
         colors = ['#38BDF8', '#22D3EE', '#4FD1C5', '#F97316', '#F59E0B']
 
+        # Убираем эмодзи из меток для графика (чтобы избежать предупреждений)
+        labels_without_emoji = [roll.replace("🧻 ", "") for roll in roll_names]
+
         wedges1, texts1, autotexts1 = ax1.pie( # type: ignore
             areas,
-            labels=[f"{roll}\n{metrics[roll]['sheets_count']} листов" for roll in roll_names],
+            labels=[f"{label}\n{metrics[roll_names[i]]['sheets_count']} листов"
+                    for i, label in enumerate(labels_without_emoji)],
             autopct='%1.1f%%',
             startangle=90,
             colors=colors[:len(roll_names)],
@@ -1331,7 +1394,8 @@ class MainWindow:
                      fontsize=12, fontweight='bold', color='#0F172A', pad=20)
 
         # Добавляем легенду с площадями
-        legend_labels1 = [f"{roll}: {metrics[roll]['area_m2']} м²" for roll in roll_names]
+        legend_labels1 = [f"{label}: {metrics[roll_names[i]]['area_m2']} м²"
+                          for i, label in enumerate(labels_without_emoji)]
         ax1.legend(legend_labels1, loc='upper left', bbox_to_anchor=(0, -0.1),
                   fontsize=9, frameon=False)
 
@@ -1341,7 +1405,8 @@ class MainWindow:
 
         wedges2, texts2, autotexts2 = ax2.pie( # type: ignore
             lengths,
-            labels=[f"{roll}\n{metrics[roll]['sheets_count']} листов" for roll in roll_names],
+            labels=[f"{label}\n{metrics[roll_names[i]]['sheets_count']} листов"
+                    for i, label in enumerate(labels_without_emoji)],
             autopct='%1.1f%%',
             startangle=90,
             colors=colors[:len(roll_names)],
@@ -1357,7 +1422,8 @@ class MainWindow:
                      fontsize=12, fontweight='bold', color='#0F172A', pad=20)
 
         # Добавляем легенду с длинами
-        legend_labels2 = [f"{roll}: {metrics[roll]['length_m']} м" for roll in roll_names]
+        legend_labels2 = [f"{label}: {metrics[roll_names[i]]['length_m']} м"
+                          for i, label in enumerate(labels_without_emoji)]
         ax2.legend(legend_labels2, loc='upper left', bbox_to_anchor=(0, -0.1),
                   fontsize=9, frameon=False)
 
@@ -1491,6 +1557,7 @@ class MainWindow:
             report_text = self.analyzer.build_report_text(combined_df, combined_summary, str(combined_out), combined_roll)
             self._set_stats_text(report_text)
             self._update_roll_visualization(combined_df, combined_roll)
+            self.treeview_tab.update_data(df=combined_df, summary=combined_summary, roll_summary=combined_roll)  # Обновляем древовидную вкладку
             self._save_report_auto(combined_df, combined_summary, str(combined_out), report_text, combined_roll)
             self.progress['value'] = self.progress['maximum']
             self.status_label.config(text="Готово!")
@@ -1529,6 +1596,7 @@ class MainWindow:
             report_text = self.analyzer.build_report_text(df, summary, out_path, roll_summary)
             self._set_stats_text(report_text)
             self._update_roll_visualization(df, roll_summary)
+            self.treeview_tab.update_data(df=df, summary=summary, roll_summary=roll_summary)  # Обновляем древовидную вкладку
             # Автосохранение отчёта в текстовый файл рядом с Excel-отчётом
             # self._save_report_auto(df, summary, out_path, report_text, roll_summary)
         except Exception as e:
@@ -1575,9 +1643,13 @@ class MainWindow:
     def show_help_window(self):
         win = tk.Toplevel(self.root)
         win.title("Помощь")
-        win.geometry("550x650") # ширина x высота
-        win.minsize(550, 650)
+        win.geometry("550x660") # ширина x высота
+        win.minsize(550, 660)
         win.configure(bg="#eef3f9")
+        win.update_idletasks()
+        x = (win.winfo_screenwidth() - 550) // 2
+        y = (win.winfo_screenheight() - 660) // 2
+        win.geometry(f"550x660+{x}+{y}")
 
         header = tk.Frame(win, bg="#405361", padx=5, pady=12)
         header.pack(fill=tk.X, padx=0, pady=0)
@@ -1695,7 +1767,8 @@ class MainWindow:
             "   а также могут быть заданы в config.yaml (текстовый файл).\n"
             "6. При запуске с параметром пути (файл или папка) обработка выполняется сразу\n"
             "   (режим CLI).\n"
-            "7. Если станет скучно то попробуй вспомнить чит-коды из DOOM"
+            "7. Если станет скучно, то попробуй вспомнить чит-коды из DOOM и вводить их на \n"
+            "   клавиатуре, пока открыто окно помощи."
         )
 
         steps_label = tk.Label(
@@ -1794,33 +1867,51 @@ class MainWindow:
         # 🎮 Пасхалка: отслеживание ввода чит-кодов
         cheat_buffer = []
 
-        # Чит-коды: код -> действие
-        cheat_codes = {
-            'iddqd': 'snake',        # God mode в DOOM -> Змейка
-            'idkfa': 'tetris',       # Всё оружие в DOOM -> Тетрис
-            'idclip': 'arkanoid',    # Проход сквозь стены в DOOM -> Арканоид
-            'idspispopd': 'galaga',  # Проход сквозь стены (старый) в DOOM -> Galaga
+        # Храним только SHA-256 хеши кодов, чтобы сами последовательности
+        # не были видны при обычном просмотре исходного кода.
+        cheat_salt = "pdf-pages-easter-egg-v1:"
+        cheat_hashes = {
+            'f44d2cc7bd669a80b4e58da86b7fc3a986b6a47b8f8bf86f109807bab53fd192': 'snake',
+            '675dff614dd069ddd14a5f1cec810d123328d67c5a9a9af54d193e4d36bcc3af': 'snake',
+            '96be471287e32979669b41439da5cb661d4d2e08997349c4f7abea28d8f157a4': 'tetris',
+            'ae13cbbde434821f038e98a2dcae6fb56987d01e250eac67e203d1b9f4d60c61': 'tetris',
+            '18afa4f742d0db24384b18c8b98ef93204b9819998118d5e06554bd4075e15ad': 'arkanoid',
+            '220c527b2997e4c4d3445683f20c454fe5af1ea73d8892f48b1058420c11e87d': 'arkanoid',
+            '2dd7147369a84f5067f83c00c237bf9903dfa47c7de664f93197e8eb21201290': 'galaga',
+            '572c474a9a8fab307a834dade8e2d7a9a8639d02d19ad7f75a2fc8a4d9388a43': 'galaga',
         }
 
         def on_key_press(event):
             # Добавляем символ в буфер
-            if event.char.lower() in 'idkfaqlcpso':
-                cheat_buffer.append(event.char.lower())
+            char = (event.char or '').lower()
+            if char in 'idkfaqlcpsoшвйлафсдзыщ':
+                cheat_buffer.append(char)
                 # Оставляем только последние 10 символов (макс. длина кода)
                 if len(cheat_buffer) > 10:
                     cheat_buffer.pop(0)
 
-                # Проверяем все коды
                 buffer_str = ''.join(cheat_buffer)
-                for code, game_type in cheat_codes.items():
-                    if buffer_str.endswith(code):
-                        win.destroy()
-                        self._launch_easter_egg(game_type)
+                game_type = None
+                for code_length in (5, 6, 10):
+                    if len(buffer_str) < code_length:
+                        continue
+                    digest = hashlib.sha256(
+                        (cheat_salt + buffer_str[-code_length:]).encode('utf-8')
+                    ).hexdigest()
+                    game_type = cheat_hashes.get(digest)
+                    if game_type is not None:
                         break
-
+                if game_type is not None:
+                    # Очищаем буфер, чтобы код не сработал повторно.
+                    cheat_buffer.clear()
+                    win.destroy()
+                    self._launch_easter_egg(game_type)
+        win.bind("<Escape>", lambda e: win.destroy())
         win.bind("<Key>", on_key_press)
         win.transient(self.root)
         win.grab_set()
+        win.lift()
+        win.after_idle(win.focus_force)
         win.wait_window()
 
     def open_config_editor(self):
@@ -1867,7 +1958,6 @@ class MainWindow:
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.status_label.config(text=f"Отчет скопирован. {len(text)} символов")
-
 
     def save_report_to_file(self):
         """Сохраняет текущий текст отчёта в файл рядом с XLSX"""
@@ -2033,6 +2123,9 @@ class MainWindow:
 
         # Обновляем визуализацию
         self._update_roll_visualization(df, roll_summary)
+
+        # Обновляем древовидную вкладку
+        self.treeview_tab.update_data(df=df, summary=summary, roll_summary=roll_summary)
 
     # ---------- пасхалка ----------
 

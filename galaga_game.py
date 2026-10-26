@@ -7,6 +7,28 @@ import tkinter as tk
 from tkinter import messagebox
 import random
 import math
+from highscores import get_highscore, save_highscore
+
+
+def _normalize_key(event):
+    """Возвращает имя клавиши независимо от раскладки клавиатуры."""
+    keysym = getattr(event, "keysym", "") or ""
+    if keysym in {"Up", "Down", "Left", "Right", "space", "Return", "Escape"}:
+        return keysym
+
+    key = keysym.lower()
+    char = (getattr(event, "char", "") or "").lower()
+    return {
+        "r": "r",
+        "к": "r",
+        "cyrillic_ka": "r",
+        "a": "a",
+        "ф": "a",
+        "cyrillic_ef": "a",
+        "d": "d",
+        "в": "d",
+        "cyrillic_ve": "d",
+    }.get(char or key, char or key)
 
 
 class PDFGalagaGame:
@@ -34,11 +56,13 @@ class PDFGalagaGame:
         self.player_y = self.height - 80
         self.player_speed = 6
         self.score = 0
+        self.highscore = get_highscore("galaga")
         self.lives = 3
         self.level = 1
         self.game_running = False
         self.game_over = False
         self.paused = False
+        self.game_timer = None
 
         # Управление
         self.keys_pressed = set()
@@ -95,6 +119,15 @@ class PDFGalagaGame:
             bg="#1E293B"
         )
         self.score_label.pack(side=tk.LEFT, padx=10)
+
+        self.highscore_label = tk.Label(
+            stats_frame,
+            text=f"Рекорд: {self.highscore}",
+            font=("Segoe UI", 10),
+            fg="#FBBF24",
+            bg="#1E293B",
+        )
+        self.highscore_label.pack(side=tk.LEFT, padx=10)
 
         # Жизни
         self.lives_label = tk.Label(
@@ -155,16 +188,30 @@ class PDFGalagaGame:
     def _on_close(self):
         """Обработка закрытия окна"""
         self.game_running = False
+        self._cancel_game_timer()
         self.window.destroy()
 
     def start_game(self):
         """Запускает новую игру"""
+        # Отменяем старый callback перед запуском новой игровой цепочки.
+        self._cancel_game_timer()
         self.score = 0
         self.lives = 3
         self.level = 1
         self.game_over = False
         self.paused = False
         self._start_level()
+
+    def _cancel_game_timer(self):
+        """Отменяет запланированный кадр игры, если он есть."""
+        if self.game_timer is not None:
+            try:
+                self.window.after_cancel(self.game_timer)
+            except tk.TclError:
+                # Таймер уже мог выполниться или окно могло закрыться.
+                pass
+            finally:
+                self.game_timer = None
 
     def _start_level(self):
         """Запускает новый уровень"""
@@ -201,11 +248,14 @@ class PDFGalagaGame:
 
         self.canvas.create_text(
             cx, cy + 20,
-            text="Кликните для старта",
+            text="Кликните или Space для старта",
             font=("Segoe UI", 14),
             fill="#CBD5E1",
             tags="level_msg"
         )
+
+        self.waiting_for_start_level = True
+
 
     def _create_enemy_formation(self):
         """Создаёт формацию врагов"""
@@ -252,6 +302,8 @@ class PDFGalagaGame:
 
     def _game_loop(self):
         """Главный игровой цикл"""
+        # Callback уже сработал; следующий будет назначен в конце кадра.
+        self.game_timer = None
         if not self.game_running or self.paused or self.game_over:
             return
 
@@ -301,7 +353,8 @@ class PDFGalagaGame:
         self._draw_game()
 
         # Следующий кадр
-        self.window.after(16, self._game_loop)  # ~60 FPS
+        if self.game_running and not self.paused and not self.game_over:
+            self.game_timer = self.window.after(16, self._game_loop)  # ~60 FPS
 
     def _update_enemies(self):
         """Обновляет позиции и поведение врагов"""
@@ -444,6 +497,12 @@ class PDFGalagaGame:
 
     def _lose_life(self):
         """Потеря жизни"""
+        # Взрыв в точке корабля до его перемещения на новую позицию.
+        self._create_explosion(
+            self.player_x + self.player_width // 2,
+            self.player_y + self.player_height // 2,
+            "#38BDF8"
+        )
         self.lives -= 1
         self._update_stats()
 
@@ -578,6 +637,9 @@ class PDFGalagaGame:
     def _update_stats(self):
         """Обновляет статистику"""
         self.score_label.config(text=f"Счёт: {self.score}")
+        if self.score > self.highscore:
+            self.highscore = save_highscore("galaga", self.score)
+            self.highscore_label.config(text=f"Рекорд: {self.highscore}")
         self.lives_label.config(text=f"🚀 × {self.lives}")
         self.level_label.config(text=f"Уровень: {self.level}")
 
@@ -585,6 +647,9 @@ class PDFGalagaGame:
         """Конец игры"""
         self.game_over = True
         self.game_running = False
+        self._cancel_game_timer()
+        self.highscore = save_highscore("galaga", self.score)
+        self.highscore_label.config(text=f"Рекорд: {self.highscore}")
 
         # Затемнение поля
         self.canvas.create_rectangle(
@@ -615,7 +680,15 @@ class PDFGalagaGame:
         )
 
         self.canvas.create_text(
-            cx, cy + 30,
+            cx, cy + 18,
+            text=f"Рекорд: {self.highscore}",
+            font=("Segoe UI", 13),
+            fill="#FBBF24",
+            tags="overlay"
+        )
+
+        self.canvas.create_text(
+            cx, cy + 44,
             text=f"Волна: {self.level}",
             font=("Segoe UI", 14),
             fill="#CBD5E1",
@@ -623,7 +696,7 @@ class PDFGalagaGame:
         )
 
         self.canvas.create_text(
-            cx, cy + 70,
+            cx, cy + 72,
             text="Нажмите R для рестарта",
             font=("Segoe UI", 12),
             fill="#94A3B8",
@@ -632,7 +705,7 @@ class PDFGalagaGame:
 
     def _on_key_press(self, event):
         """Обработка нажатий клавиш"""
-        key = event.keysym
+        key = _normalize_key(event)
 
         # Если ждём старта игры
         if hasattr(self, 'waiting_for_start') and self.waiting_for_start:
@@ -642,8 +715,17 @@ class PDFGalagaGame:
                 self.start_game()
             return
 
+        # Если ждём старта Уровня
+        if hasattr(self, 'waiting_for_start_level') and self.waiting_for_start_level and not self.game_running and not self.game_over:
+            if key in ["space"]:
+                self.waiting_for_start_level = False
+                self.canvas.delete("level_msg")
+                self.game_running = True
+                self._game_loop()
+            return
+
         if self.game_over:
-            if key.lower() == "r":
+            if key == "r":
                 self.canvas.delete("overlay")
                 self.start_game()
             return
@@ -656,6 +738,7 @@ class PDFGalagaGame:
                 self._game_loop()
             else:
                 self.paused = True
+                self._cancel_game_timer()
                 self.canvas.create_text(
                     self.width // 2,
                     self.height // 2,
@@ -674,7 +757,7 @@ class PDFGalagaGame:
 
     def _on_key_release(self, event):
         """Обработка отпускания клавиш"""
-        key = event.keysym
+        key = _normalize_key(event)
         self.keys_pressed.discard(key)
 
     def _on_click(self, event):

@@ -46,6 +46,10 @@ class ConfigEditor(tk.Toplevel):  # ✅ Наследуемся от Toplevel!
         self.geometry("500x550") # Ширина x Высота
         self.minsize(500, 550)
         self.resizable(True, True)
+        self.update_idletasks()
+        x = max(0, (self.winfo_screenwidth() - self.winfo_width()) // 2)
+        y = max(0, (self.winfo_screenheight() - self.winfo_height()) // 2)
+        self.geometry(f"+{x}+{y}")
         self.changes_is_saved = True
         self.config = self._load_config()
 

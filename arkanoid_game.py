@@ -7,6 +7,22 @@ import tkinter as tk
 from tkinter import messagebox
 import random
 import math
+from highscores import get_highscore, save_highscore
+
+
+def _normalize_key(event):
+    """Возвращает имя клавиши независимо от раскладки клавиатуры."""
+    keysym = getattr(event, "keysym", "") or ""
+    if keysym in {"Up", "Down", "Left", "Right", "space", "Return", "Escape"}:
+        return keysym
+
+    key = keysym.lower()
+    char = (getattr(event, "char", "") or "").lower()
+    return {
+        "r": "r",
+        "к": "r",
+        "cyrillic_ka": "r",
+    }.get(char or key, char or key)
 
 
 class PDFArkanoidGame:
@@ -20,7 +36,7 @@ class PDFArkanoidGame:
         self.window.resizable(False, False)
 
         # Размеры игрового поля
-        self.width = 600
+        self.width = 635
         self.height = 700
         self.paddle_width = 100
         self.paddle_height = 15
@@ -39,12 +55,17 @@ class PDFArkanoidGame:
         self.ball_dx = 4
         self.ball_dy = -4
         self.score = 0
+        self.highscore = get_highscore("arkanoid")
         self.lives = 3
         self.level = 1
         self.game_running = False
         self.game_over = False
         self.paused = False
         self.blocks = []
+        self.game_timer = None
+        self.life_explosion_timer = None
+        self.life_restart_timer = None
+        self.life_explosion_frame = 0
 
         # Форматы PDF для блоков (цвета и очки)
         self.PDF_FORMATS = [
@@ -85,6 +106,15 @@ class PDFArkanoidGame:
             bg="#1E293B"
         )
         self.score_label.pack(side=tk.LEFT, padx=10)
+
+        self.highscore_label = tk.Label(
+            stats_frame,
+            text=f"Рекорд: {self.highscore}",
+            font=("Segoe UI", 10),
+            fg="#FBBF24",
+            bg="#1E293B",
+        )
+        self.highscore_label.pack(side=tk.LEFT, padx=10)
 
         # Жизни
         self.lives_label = tk.Label(
@@ -128,16 +158,32 @@ class PDFArkanoidGame:
     def _on_close(self):
         """Обработка закрытия окна"""
         self.game_running = False
+        self._cancel_game_timer()
+        self._cancel_life_explosion()
         self.window.destroy()
 
     def start_game(self):
         """Запускает новую игру"""
+        # Отменяем старый callback перед запуском новой игровой цепочки.
+        self._cancel_game_timer()
+        self._cancel_life_explosion()
         self.score = 0
         self.lives = 3
         self.level = 1
         self.game_over = False
         self.paused = False
         self._start_level()
+
+    def _cancel_game_timer(self):
+        """Отменяет запланированный кадр игры, если он есть."""
+        if self.game_timer is not None:
+            try:
+                self.window.after_cancel(self.game_timer)
+            except tk.TclError:
+                # Таймер уже мог выполниться или окно могло закрыться.
+                pass
+            finally:
+                self.game_timer = None
 
     def _start_level(self):
         """Запускает новый уровень"""
@@ -147,7 +193,7 @@ class PDFArkanoidGame:
         self.ball_y = self.height - 70
 
         # Скорость шарика увеличивается с уровнем
-        speed = 4 + (self.level - 1) * 0.5
+        speed = 8 + (self.level - 2) * 0.5
         angle = random.uniform(-60, -120) * math.pi / 180
         self.ball_dx = speed * math.cos(angle)
         self.ball_dy = speed * math.sin(angle)
@@ -204,6 +250,8 @@ class PDFArkanoidGame:
 
     def _game_loop(self):
         """Главный игровой цикл"""
+        # Callback уже сработал; следующий будет назначен в конце кадра.
+        self.game_timer = None
         if not self.game_running or self.paused:
             return
 
@@ -256,7 +304,8 @@ class PDFArkanoidGame:
         self._draw_game()
 
         # Следующий кадр
-        self.window.after(16, self._game_loop)  # ~60 FPS
+        if self.game_running and not self.paused and not self.game_over:
+            self.game_timer = self.window.after(16, self._game_loop)  # ~60 FPS
 
     def _check_block_collision(self):
         """Проверяет столкновение с блоками"""
@@ -324,24 +373,77 @@ class PDFArkanoidGame:
 
     def _lose_life(self):
         """Потеря жизни"""
+        if self.life_explosion_timer is not None:
+            return
+        self.life_explosion_frame = 0
+        self._draw_life_explosion()
         self.lives -= 1
         self._update_stats()
 
+        # Дожидаемся окончания взрыва и затем либо завершаем игру,
+        # либо создаём новый шарик.
+        self.game_running = False
+        self.life_restart_timer = self.window.after(
+            280, self._restart_after_life_loss
+        )
+
+    def _cancel_life_explosion(self):
+        """Отменяет анимацию взрыва после потери жизни."""
+        for timer_name in ("life_explosion_timer", "life_restart_timer"):
+            timer_id = getattr(self, timer_name)
+            if timer_id is None:
+                continue
+            try:
+                self.window.after_cancel(timer_id)
+            except tk.TclError:
+                pass
+            finally:
+                setattr(self, timer_name, None)
+
+    def _draw_life_explosion(self):
+        """Рисует взрыв в точке потери шарика."""
+        self.canvas.delete("game")
+        cx = self.ball_x
+        cy = self.ball_y
+        radius = 10 + self.life_explosion_frame * 5
+        colors = ["#FBBF24", "#FB923C", "#F87171", "#7C2D12"]
+        color = colors[min(self.life_explosion_frame // 2, len(colors) - 1)]
+
+        self.canvas.create_oval(
+            cx - radius, cy - radius,
+            cx + radius, cy + radius,
+            fill=color,
+            outline="#F8FAFC",
+            width=2,
+            tags=("game", "life_explosion")
+        )
+
+        if self.life_explosion_frame < 5:
+            self.life_explosion_frame += 1
+            self.life_explosion_timer = self.window.after(
+                45, self._draw_life_explosion
+            )
+        else:
+            self.life_explosion_timer = None
+
+    def _restart_after_life_loss(self):
+        """Возобновляет игру после анимации потери жизни."""
+        self.life_restart_timer = None
+        self.life_explosion_timer = None
+        self.canvas.delete("life_explosion")
         if self.lives <= 0:
             self._game_over()
-        else:
-            # Перезапускаем с новым шариком
-            self.game_running = False
-            self.ball_x = self.width // 2
-            self.ball_y = self.height - 70
-            self.paddle_x = self.width // 2 - self.paddle_width // 2
+            return
 
-            angle = random.uniform(-60, -120) * math.pi / 180
-            speed = 4 + (self.level - 1) * 0.5
-            self.ball_dx = speed * math.cos(angle)
-            self.ball_dy = speed * math.sin(angle)
+        self.ball_x = self.width // 2
+        self.ball_y = self.height - 70
+        self.paddle_x = self.width // 2 - self.paddle_width // 2
 
-            self._draw_game()
+        angle = random.uniform(-60, -120) * math.pi / 180
+        speed = 8 + (self.level - 2) * 0.5
+        self.ball_dx = speed * math.cos(angle)
+        self.ball_dy = speed * math.sin(angle)
+        self._draw_game()
 
     def _next_level(self):
         """Переход на следующий уровень"""
@@ -401,6 +503,9 @@ class PDFArkanoidGame:
     def _update_stats(self):
         """Обновляет статистику"""
         self.score_label.config(text=f"Счёт: {self.score}")
+        if self.score > self.highscore:
+            self.highscore = save_highscore("arkanoid", self.score)
+            self.highscore_label.config(text=f"Рекорд: {self.highscore}")
         self.lives_label.config(text=f"❤️ × {self.lives}")
         self.level_label.config(text=f"Уровень: {self.level}")
 
@@ -408,6 +513,9 @@ class PDFArkanoidGame:
         """Конец игры"""
         self.game_over = True
         self.game_running = False
+        self._cancel_game_timer()
+        self.highscore = save_highscore("arkanoid", self.score)
+        self.highscore_label.config(text=f"Рекорд: {self.highscore}")
 
         # Затемнение поля
         self.canvas.create_rectangle(
@@ -438,7 +546,15 @@ class PDFArkanoidGame:
         )
 
         self.canvas.create_text(
-            cx, cy + 30,
+            cx, cy + 18,
+            text=f"Рекорд: {self.highscore}",
+            font=("Segoe UI", 13),
+            fill="#FBBF24",
+            tags="overlay"
+        )
+
+        self.canvas.create_text(
+            cx, cy + 44,
             text=f"Достигнут уровень: {self.level}",
             font=("Segoe UI", 14),
             fill="#CBD5E1",
@@ -446,7 +562,7 @@ class PDFArkanoidGame:
         )
 
         self.canvas.create_text(
-            cx, cy + 70,
+            cx, cy + 72,
             text="Нажмите R для рестарта",
             font=("Segoe UI", 12),
             fill="#94A3B8",
@@ -455,7 +571,7 @@ class PDFArkanoidGame:
 
     def _on_key_press(self, event):
         """Обработка нажатий клавиш"""
-        key = event.keysym
+        key = _normalize_key(event)
 
         # Если ждём старта игры
         if hasattr(self, 'waiting_for_start') and self.waiting_for_start:
@@ -465,7 +581,7 @@ class PDFArkanoidGame:
             return
 
         if self.game_over:
-            if key.lower() == "r":
+            if key == "r":
                 self.canvas.delete("overlay")
                 self.start_game()
             return
@@ -478,6 +594,7 @@ class PDFArkanoidGame:
                 self._game_loop()
             else:
                 self.paused = True
+                self._cancel_game_timer()
                 self.canvas.create_text(
                     self.width // 2,
                     self.height // 2,
@@ -500,7 +617,11 @@ class PDFArkanoidGame:
 
     def _on_click(self, event):
         """Клик для старта"""
-        if not self.game_running and not self.game_over:
+        if (
+            not self.game_running
+            and not self.game_over
+            and self.life_restart_timer is None
+        ):
             self.canvas.delete("level_msg")
             self.game_running = True
             self._game_loop()

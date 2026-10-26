@@ -6,6 +6,23 @@ import tkinter as tk
 from tkinter import messagebox
 import random
 from typing import List, Tuple
+from highscores import get_highscore, save_highscore
+
+
+def _normalize_key(event):
+    """Возвращает имя клавиши независимо от раскладки клавиатуры."""
+    keysym = getattr(event, "keysym", "") or ""
+    if keysym in {"Up", "Down", "Left", "Right", "space", "Return", "Escape"}:
+        return keysym
+
+    key = keysym.lower()
+    char = (getattr(event, "char", "") or "").lower()
+    return {
+        "r": "r",
+        "к": "r",
+        "cyrillic_ka": "r",
+    }.get(char or key, char or key)
+
 
 class PDFSnakeGame:
     """Змейка собирает форматы PDF листов"""
@@ -37,8 +54,10 @@ class PDFSnakeGame:
         self.food_pos = (0, 0)
         self.food_format = None
         self.score = 0
+        self.highscore = get_highscore("snake")
         self.game_running = False
         self.game_over = False
+        self.game_timer = None
 
         self._build_ui()
         self._center_window()
@@ -62,6 +81,15 @@ class PDFSnakeGame:
             bg="#0F172A"
         )
         self.score_label.pack(side=tk.LEFT)
+
+        self.highscore_label = tk.Label(
+            info_frame,
+            text=f"Рекорд: {self.highscore}",
+            font=("Segoe UI", 10),
+            fg="#FBBF24",
+            bg="#0F172A",
+        )
+        self.highscore_label.pack(side=tk.LEFT, padx=(18, 0))
 
         self.speed_label = tk.Label(
             info_frame,
@@ -118,6 +146,10 @@ class PDFSnakeGame:
 
     def start_game(self):
         """Запускает новую игру"""
+        # При рестарте отменяем ход предыдущей игры, иначе запустятся
+        # две цепочки after() и змейка будет двигаться быстрее.
+        self._cancel_game_timer()
+
         # Инициализация змейки в центре
         center_x = self.grid_width // 2
         center_y = self.grid_height // 2
@@ -131,12 +163,24 @@ class PDFSnakeGame:
         self.next_direction = "Right"
         self.score = 0
         self.game_speed = 150
+        self.speed_label.config(text="Скорость: 1x")
         self.game_running = True
         self.game_over = False
 
         self._spawn_food()
         self._update_score()
         self._game_loop()
+
+    def _cancel_game_timer(self):
+        """Отменяет запланированный игровой ход, если он есть."""
+        if self.game_timer is not None:
+            try:
+                self.window.after_cancel(self.game_timer)
+            except tk.TclError:
+                # Таймер мог уже выполниться или окно могло закрыться.
+                pass
+            finally:
+                self.game_timer = None
 
     def _spawn_food(self):
         """Создаёт новую еду (формат PDF)"""
@@ -150,6 +194,8 @@ class PDFSnakeGame:
 
     def _game_loop(self):
         """Основной игровой цикл"""
+        # Callback уже сработал; следующий будет назначен в конце хода.
+        self.game_timer = None
         if not self.game_running or self.game_over:
             return
 
@@ -158,7 +204,8 @@ class PDFSnakeGame:
         self._draw_game()
 
         # Следующий кадр
-        self.window.after(self.game_speed, self._game_loop)
+        if self.game_running and not self.game_over:
+            self.game_timer = self.window.after(self.game_speed, self._game_loop)
 
     def _move_snake(self):
         """Двигает змейку"""
@@ -214,6 +261,9 @@ class PDFSnakeGame:
         """Конец игры"""
         self.game_over = True
         self.game_running = False
+        self._cancel_game_timer()
+        self.highscore = save_highscore("snake", self.score)
+        self.highscore_label.config(text=f"Рекорд: {self.highscore}")
 
         # Затемнение поля
         self.canvas.create_rectangle(
@@ -246,7 +296,15 @@ class PDFSnakeGame:
         )
 
         self.canvas.create_text(
-            cx, cy + 50,
+            cx, cy + 42,
+            text=f"Рекорд: {self.highscore}",
+            font=("Segoe UI", 14),
+            fill="#FBBF24",
+            tags="overlay"
+        )
+
+        self.canvas.create_text(
+            cx, cy + 72,
             text="Нажмите R для рестарта",
             font=("Segoe UI", 14),
             fill="#CBD5E1",
@@ -315,10 +373,13 @@ class PDFSnakeGame:
     def _update_score(self):
         """Обновляет счёт"""
         self.score_label.config(text=f"Счёт: {self.score}")
+        if self.score > self.highscore:
+            self.highscore = save_highscore("snake", self.score)
+            self.highscore_label.config(text=f"Рекорд: {self.highscore}")
 
     def _on_key_press(self, event):
         """Обработка нажатий клавиш"""
-        key = event.keysym
+        key = _normalize_key(event)
 
         # Управление направлением
         if key == "Up" and self.direction != "Down":
@@ -334,6 +395,7 @@ class PDFSnakeGame:
         elif key == "space":
             if self.game_running and not self.game_over:
                 self.game_running = False
+                self._cancel_game_timer()
                 self.canvas.create_text(
                     (self.grid_width * self.cell_size) // 2,
                     (self.grid_height * self.cell_size) // 2,
