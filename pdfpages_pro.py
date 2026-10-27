@@ -265,7 +265,8 @@ class PDFAnalyzer:
             h_mm: высота листа (мм)
             std_format: название стандартного формата (для исключений A4 и A3)
         
-        Исключения: A4 и A3 возвращают 'Нестандартный'
+        Листы, помещающиеся в A3, возвращают 'Отдельный лист'.
+        Остальные листы относятся к подходящему рулону по меньшей стороне.
         
         Группы по меньшей стороне формата:
         - 297мм: листы с меньшей стороной ~297мм
@@ -275,26 +276,21 @@ class PDFAnalyzer:
         
         Возвращает: '297мм', '420мм', '594мм', '841мм' или 'Нестандартный'
         """
-        # Исключаем только A4 и A3
-        if std_format in ("A4", "A3"):
+        # Любой лист, который можно напечатать на листовом принтере A3,
+        # не должен попадать в распределение по рулонам.
+        short_side, long_side = sorted((w_mm, h_mm))
+        if short_side <= 297 + self.tolerance and long_side <= 420 + self.tolerance:
             return "Отдельный лист"
         
         # Определяем меньшую сторону
         min_side = min(w_mm, h_mm)
         
-        # Классифицируем по меньшей стороне с допуском
-        tolerance = self.tolerance
-        
-        if abs(min_side - 297) <= tolerance:
-            return "297мм"
-        elif abs(min_side - 420) <= tolerance:
-            return "420мм"
-        elif abs(min_side - 594) <= tolerance:
-            return "594мм"
-        elif abs(min_side - 841) <= tolerance:
-            return "841мм"
-        else:
-            return "Нестандартный"
+        # Подбираем рулон, который вмещает меньшую сторону листа.
+        # Нестандартные размеры также попадают в ближайший подходящий рулон.
+        for roll_width in (297, 420, 594, 841):
+            if min_side <= roll_width + self.tolerance:
+                return f"{roll_width}мм"
+        return "841мм"
 
     def build_roll_summary(self, df: pd.DataFrame) -> pd.DataFrame:
         """Строит сводку по форматам рулонов."""
@@ -310,8 +306,9 @@ class PDFAnalyzer:
             axis=1
         )
 
-        # Исключаем "Нестандартный" из сводки
-        df_filtered = df_filtered[~df_filtered["Формат рулона"].isin(["Отдельный лист", "Нестандартный"])]
+        # Из сводки рулонов исключаем только листовую печать (A3 и меньше).
+        # Все прочие страницы классификатор относит к одному из рулонов.
+        df_filtered = df_filtered[df_filtered["Формат рулона"] != "Отдельный лист"]
 
         if df_filtered.empty:
             return pd.DataFrame()

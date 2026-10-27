@@ -429,13 +429,22 @@ class TreeviewTab:
             total_bw = (file_df["Цветность"] == "Ч/Б").sum()
             total_color = (file_df["Цветность"] == "Цветная").sum()
 
-            # Собираем ВСЕ форматы (включая A4, A3)
+            # Лазерную группу определяем по габаритам, а не по имени:
+            # так в неё попадут любые листы, помещающиеся в A3.
+            laser_page_mask = (
+                (file_df[["Ширина (мм)", "Высота (мм)"]].min(axis=1) <= 297 + 1)
+                & (file_df[["Ширина (мм)", "Высота (мм)"]].max(axis=1) <= 420 + 1)
+            )
+            laser_format_names = set(
+                file_df.loc[laser_page_mask, "Стандартный формат"].unique()
+            )
+
+            # Собираем форматы вне лазерной группы, чтобы листы не дублировались.
             formats = []
             for _, row in file_summary.iterrows():
                 fmt_name = row["Стандартный формат"]
 
-                # Пропускаем только строку "A4 + A3"
-                if fmt_name == "A4 + A3":
+                if fmt_name == "A4 + A3" or fmt_name in laser_format_names:
                     continue
 
                 fmt_count = row["Количество"]
@@ -464,11 +473,12 @@ class TreeviewTab:
                     "all_pages": all_pages
                 })
 
-            # Собираем информацию о лазерной печати (A4 + A3).
-            # В дереве A4 и A3 отображаются одной объединённой группой.
+            # В лазерную группу включаем все страницы, помещающиеся на A3,
+            # а не форматы, в названии которых случайно встречается A3/A4
+            # (например, длинные A3xN относятся к рулонам).
             laser_formats = []
 
-            for fmt_name in ["A4", "A3"]:
+            for fmt_name in sorted(laser_format_names):
                 fmt_row = file_summary[file_summary["Стандартный формат"] == fmt_name]
                 if not fmt_row.empty:
                     row = fmt_row.iloc[0]
@@ -760,13 +770,12 @@ class TreeviewTab:
         laser_bw_range = laser_info.get("bw_range", "-")
         laser_color_range = laser_info.get("color_range", "-")
 
-        # Формируем общий диапазон для узла
-        all_ranges = []
-        if laser_bw_range != "-":
-            all_ranges.append(laser_bw_range)
-        if laser_color_range != "-":
-            all_ranges.append(laser_color_range)
-        laser_range = ", ".join(all_ranges) if all_ranges else "-"
+        # Формируем общий диапазон в порядке страниц, независимо от цветности.
+        # Нельзя просто склеивать строки Ч/Б и цветных диапазонов:
+        # например, "1-3" + "5-6" должно оставаться "1-3, 5-6".
+        all_laser_pages = self._expand_page_ranges(laser_bw_range)
+        all_laser_pages.extend(self._expand_page_ranges(laser_color_range))
+        laser_range = self._format_page_ranges(all_laser_pages)
 
         # Добавляем главный узел без цветового кодирования, но с общим диапазоном
         laser_node = self.tree.insert(
@@ -939,6 +948,27 @@ class TreeviewTab:
             ranges.append(f"{start}-{end}")
 
         return ", ".join(ranges)
+
+    @staticmethod
+    def _expand_page_ranges(page_range):
+        """Раскрывает строку диапазонов страниц в список номеров."""
+        if not page_range or page_range == "-":
+            return []
+
+        pages = []
+        for part in str(page_range).replace(",", ", ").split(", "):
+            part = part.strip()
+            if not part or part == "-":
+                continue
+            try:
+                if "-" in part:
+                    start, end = map(int, part.split("-", 1))
+                    pages.extend(range(start, end + 1))
+                else:
+                    pages.append(int(part))
+            except ValueError:
+                continue
+        return pages
 
     def _apply_filter(self):
         """Применяет фильтрацию и поиск"""
