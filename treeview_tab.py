@@ -439,12 +439,14 @@ class TreeviewTab:
                 file_df.loc[laser_page_mask, "Стандартный формат"].unique()
             )
 
-            # Собираем форматы вне лазерной группы, чтобы листы не дублировались.
+            # Собираем все форматы, включая форматы лазерной печати.
+            # Лазерные форматы также выводятся отдельной группой ниже,
+            # поэтому здесь они намеренно отображаются повторно.
             formats = []
             for _, row in file_summary.iterrows():
                 fmt_name = row["Стандартный формат"]
 
-                if fmt_name == "A4 + A3" or fmt_name in laser_format_names:
+                if fmt_name == "A4 + A3":
                     continue
 
                 fmt_count = row["Количество"]

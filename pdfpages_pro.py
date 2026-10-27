@@ -523,7 +523,7 @@ class PDFAnalyzer:
         )
         raise PermissionError(f"Невозможно сохранить {current_path}: файл остаётся занят")
 
-    def process_path(self, path: str, progress_callback=None, save_excel: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
+    def process_path(self, path: str, progress_callback=None, save_excel: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, str, pd.DataFrame]:
         """Главная функция обработки"""
         
         all_data = []
@@ -909,6 +909,7 @@ class MainWindow:
        
         self.root.title("Анализатор PDF файлов "+version)
         self.root.geometry("900x650")
+        self.root.minsize(800, 500)
         self.root.update_idletasks()
         x = max(0, (self.root.winfo_screenwidth() - self.root.winfo_width()) // 2)
         y = max(0, (self.root.winfo_screenheight() - self.root.winfo_height()) // 2)
@@ -937,7 +938,7 @@ class MainWindow:
     def load_icons(self):
         icon_names = [
             "pdf_file", "folder", "settings", "help", "copy", "save", "order", "cur_settings", "formats16", "margin16", "order16", "icon", "icon48",
-            "pdf_file16", "plotter16", "roll16", "sheet16", "laser16", "bw16", "color16",
+            "pdf_file16", "plotter16", "roll16", "sheet16", "laser16", "bw16", "color16", "add_file", "add_folder",
             "openfolder", "formats", "margin","select","txt_report","exit", "xlsx", "diagram", "report", "diagram16", "report16", "text-file"
         ]
         self.icons = {
@@ -1002,11 +1003,9 @@ class MainWindow:
         top_toolbar = Toolbar(top_frame, self)
         top_toolbar.pack(side=tk.LEFT, anchor=tk.NW, fill=tk.X, expand=True, padx=0, pady=0)
 
-        top_toolbar.add_button(icon="pdf_file", command=self.on_open_file, tooltip="Открыть PDF файл")
-        top_toolbar.add_button(icon="openfolder", command=self.on_open_folder, tooltip="Открыть папку")
+        top_toolbar.add_button(icon="add_file", command=self.on_open_file, tooltip="Открыть PDF файл")
+        top_toolbar.add_button(icon="add_folder", command=self.on_open_folder, tooltip="Открыть папку")
         top_toolbar.add_separator()
-        top_toolbar.add_button(icon="help", command=self.show_help_window, tooltip="Помощь <F1>", side_str='right')
-        top_toolbar.add_button(icon="settings", command=self.open_config_editor, tooltip="Настройки", side_str='right')
        
         self.select_all_button = top_toolbar.add_button(
             icon="select",
@@ -1021,10 +1020,13 @@ class MainWindow:
             state="disabled",
         )
         top_toolbar.add_separator()
-        top_toolbar.add_button(icon="xlsx", command=self.open_excel_report, tooltip="Excel отчет")
+        top_toolbar.add_button(icon="xlsx", command=self.open_excel_report, tooltip="Сохранить и открыть Excel отчет")
+        top_toolbar.add_button(icon="text-file", command=self.save_report_to_file, tooltip="Сохранить и открыть текстовый отчёт")
         top_toolbar.add_button(icon="folder", command=self.open_reports_folder, tooltip="Папка отчетов")
-        top_toolbar.add_button(icon="save", command=self.save_report_to_file, tooltip="Сохранить текстовый отчёт")
+        
         # top_toolbar.add_button(icon="exit", command=root.destroy, tooltip="Выход", side_str='right')
+        top_toolbar.add_button(icon="help", command=self.show_help_window, tooltip="Помощь <F1>", side_str='right')
+        top_toolbar.add_button(icon="settings", command=self.open_config_editor, tooltip="Настройки", side_str='right')
 
         # Центральная область — вкладки
         center_frame = ttk.Frame(root)
@@ -1367,7 +1369,7 @@ class MainWindow:
         roll_names = list(metrics.keys())
         areas = [metrics[roll]["area_m2"] for roll in roll_names]
 
-        colors = ['#38BDF8', '#22D3EE', '#4FD1C5', '#F97316', '#F59E0B']
+        colors = ["#EC2828", "#C4920A", "#3FCC07", "#0568B9", "#C415DB"]
 
         # Убираем эмодзи из меток для графика (чтобы избежать предупреждений)
         labels_without_emoji = [roll.replace("🧻 ", "") for roll in roll_names]
@@ -1379,22 +1381,30 @@ class MainWindow:
             autopct='%1.1f%%',
             startangle=90,
             colors=colors[:len(roll_names)],
-            textprops={'fontsize': 9, 'color': '#1E293B'}
+            textprops={'fontsize': 8, 'color': '#1E293B'},
+            explode=[0.05] * len(roll_names),  # небольшое смещение для всех секторов
+            wedgeprops={'edgecolor': 'black', 'linewidth': 1},
+            shadow=True,
+            pctdistance=0.75,
+            labeldistance=1.10,
+            radius=1.0
         )
 
         for autotext in autotexts1:
             autotext.set_color('white')
             autotext.set_fontweight('bold')
-            autotext.set_fontsize(10)
+            autotext.set_fontsize(9)
 
-        ax1.set_title('Распределение площади печати по рулонам',
-                     fontsize=12, fontweight='bold', color='#0F172A', pad=20)
+        ax1.set_title('По площади печати',
+                     fontsize=11, fontweight='bold', color='#0F172A', pad=15)
+        
+        ax1.text(0.5, 0.0, 'пропорционально времени печати', transform=ax1.transAxes, fontsize=8, ha='center', va='top', color='#475569')
 
         # Добавляем легенду с площадями
         legend_labels1 = [f"{label}: {metrics[roll_names[i]]['area_m2']} м²"
                           for i, label in enumerate(labels_without_emoji)]
-        ax1.legend(legend_labels1, loc='upper left', bbox_to_anchor=(0, -0.1),
-                  fontsize=9, frameon=False)
+        ax1.legend(legend_labels1, loc='upper center', bbox_to_anchor=(0.5, -0.15), fontsize=8, frameon=True,
+            fancybox=True, edgecolor='black', facecolor="#f8f8f8")
 
         # Диаграмма 2: Длина рулона
         ax2 = fig.add_subplot(122)
@@ -1407,24 +1417,32 @@ class MainWindow:
             autopct='%1.1f%%',
             startangle=90,
             colors=colors[:len(roll_names)],
-            textprops={'fontsize': 9, 'color': '#1E293B'}
+            textprops={'fontsize': 8, 'color': '#1E293B'},
+            explode=[0.05] * len(roll_names),  # небольшое смещение для всех секторов
+            wedgeprops={'edgecolor': 'black', 'linewidth': 1},
+            shadow=True,
+            pctdistance=0.75,
+            labeldistance=1.10,
+            radius=1.0
         )
 
         for autotext in autotexts2:
             autotext.set_color('white')
             autotext.set_fontweight('bold')
-            autotext.set_fontsize(10)
+            autotext.set_fontsize(9)
 
-        ax2.set_title('Распределение длины рулонов',
-                     fontsize=12, fontweight='bold', color='#0F172A', pad=20)
+        ax2.set_title('По длине носителя',
+                     fontsize=11, fontweight='bold', color='#0F172A', pad=15)
+        
+        ax2.text(0.5, -0.05, 'пропорционально расходу носителя', transform=ax2.transAxes, fontsize=8, ha='center', va='top', color='#475569')
 
         # Добавляем легенду с длинами
         legend_labels2 = [f"{label}: {metrics[roll_names[i]]['length_m']} м"
                           for i, label in enumerate(labels_without_emoji)]
-        ax2.legend(legend_labels2, loc='upper left', bbox_to_anchor=(0, -0.1),
-                  fontsize=9, frameon=False)
+        ax2.legend(legend_labels2, loc='upper center', bbox_to_anchor=(0.5, -0.15), fontsize=8, frameon=True,
+            fancybox=True, edgecolor='black', facecolor="#f8f8f8")
 
-        fig.tight_layout(pad=3.0)
+        fig.tight_layout(pad=1)
 
         # Встраиваем в Tkinter
         canvas = FigureCanvasTkAgg(fig, master=self.viz_frame)
@@ -1439,7 +1457,7 @@ class MainWindow:
         total_length = sum(lengths)
         total_sheets = sum(metrics[roll]['sheets_count'] for roll in roll_names)
 
-        info_text = f"📊 ИТОГО:  {total_sheets} листов  |  {total_area:.2f} м²  |  {total_length:.2f} м"
+        info_text = f"ИТОГО на рулоны:  {total_sheets} листов  |  {total_area:.2f} м²  |  {total_length:.2f} м"
         info_label = ttk.Label(info_frame, text=info_text, font=(font_face, 11, 'bold'),
                               foreground='#0F172A')
         info_label.pack()
@@ -1549,13 +1567,11 @@ class MainWindow:
             combined_roll = pd.concat(all_roll_summaries, ignore_index=True) if all_roll_summaries else pd.DataFrame()
 
             combined_out = root_dir / f"{base_name}_all_sizes.xlsx"
-            self.analyzer.save_excel_safe(combined_out, combined_df, combined_summary, combined_roll)
             self.last_result = (combined_df, combined_summary, str(combined_out), combined_roll)
             report_text = self.analyzer.build_report_text(combined_df, combined_summary, str(combined_out), combined_roll)
             self._set_stats_text(report_text)
             self._update_roll_visualization(combined_df, combined_roll)
             self.treeview_tab.update_data(df=combined_df, summary=combined_summary, roll_summary=combined_roll)  # Обновляем древовидную вкладку
-            self._save_report_auto(combined_df, combined_summary, str(combined_out), report_text, combined_roll)
             self.progress['value'] = self.progress['maximum']
             self.status_label.config(text="Готово!")
             self.root.update_idletasks()
@@ -1594,8 +1610,6 @@ class MainWindow:
             self._set_stats_text(report_text)
             self._update_roll_visualization(df, roll_summary)
             self.treeview_tab.update_data(df=df, summary=summary, roll_summary=roll_summary)  # Обновляем древовидную вкладку
-            # Автосохранение отчёта в текстовый файл рядом с Excel-отчётом
-            # self._save_report_auto(df, summary, out_path, report_text, roll_summary)
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка обработки:\n{e}")
 
@@ -1614,18 +1628,6 @@ class MainWindow:
                 self.status_label.config(text=f"Обработка: {Path(filename).name} ({current}/{total})")
             
             self.root.update_idletasks()
-
-    def _save_report_auto(self, df, summary, out_path: str, report_text: str, roll_summary=None):
-        """Автоматически сохраняет отчёт после анализа"""
-        base_name = Path(out_path).stem
-        txt_path = Path(out_path).parent / f"{base_name}_report.txt"
-        
-        try:
-            with open(txt_path, 'w', encoding='utf-8-sig') as f:
-                f.write(report_text)
-            print(f"📄 Автосохранение: {txt_path}")
-        except Exception as e:
-            print(f"⚠️ Автосохранение не удалось: {e}")
 
     def resource_path(self, relative_path):
         """Получает абсолютный путь к ресурсу, работает как в dev, так и в PyInstaller"""
@@ -1957,7 +1959,7 @@ class MainWindow:
         self.status_label.config(text=f"Отчет скопирован. {len(text)} символов")
 
     def save_report_to_file(self):
-        """Сохраняет текущий текст отчёта в файл рядом с XLSX"""
+        """Сохраняет и открывает текстовый отчёт по запросу пользователя."""
         if not self.last_result:
             messagebox.showwarning("Предупреждение", "Сначала выполните анализ!")
             return
@@ -1972,30 +1974,35 @@ class MainWindow:
         try:
             with open(txt_path, 'w', encoding='utf-8-sig') as f:
                 f.write(report_text)
-            messagebox.showinfo("Сохранено", f"Отчёт сохранён:\n{txt_path}")
-            print(f"📄 Текстовый отчёт: {txt_path}")
+            self._open_report_file(str(txt_path))
+            self.status_label.config(text=f"Текстовый отчёт сохранён и открыт: {txt_path.name}")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить:\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить или открыть текстовый отчёт:\n{e}")
 
     def open_excel_report(self):
-        """Открывает последний Excel отчёт"""
+        """Создаёт, сохраняет и открывает Excel-отчёт по запросу пользователя."""
         if not self.last_result:
             messagebox.showwarning("Предупреждение", "Сначала выполните анализ!")
             return
         
-        _, _, out_path, _ = self.last_result
+        df, summary, out_path, roll_summary = self.last_result
         
         try:
-            # Открываем файл стандартным обработчиком
-            if platform.system() == "Windows":
-                os.startfile(out_path)
-            elif platform.system() == "Darwin":
-                subprocess.run(['open', out_path])
-            else:
-                subprocess.run(['xdg-open', out_path])
-            print(f"📊 Открыт Excel: {out_path}")
+            self.analyzer.save_excel_safe(Path(out_path), df, summary, roll_summary)
+            self._open_report_file(out_path)
+            self.status_label.config(text=f"Excel-отчёт сохранён и открыт: {Path(out_path).name}")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось открыть файл:\n{e}")
+            messagebox.showerror("Ошибка", f"Не удалось сохранить или открыть Excel-отчёт:\n{e}")
+
+    @staticmethod
+    def _open_report_file(file_path: str):
+        """Открывает файл отчёта стандартным приложением ОС."""
+        if platform.system() == "Windows":
+            os.startfile(file_path)
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", file_path], check=True)
+        else:
+            subprocess.run(["xdg-open", file_path], check=True)
 
     def open_reports_folder(self):
         """Открывает папку с отчётами в проводнике"""
